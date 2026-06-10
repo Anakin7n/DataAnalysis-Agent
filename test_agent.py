@@ -4,6 +4,13 @@
 """
 import json
 import sys
+
+# Windows 控制台默认 GBK 无法输出 emoji，强制切 UTF-8
+if sys.stdout.encoding != 'utf-8':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 from agent.llm_client import chat
 from agent.prompts import INTENT_PROMPT, EXTRACT_REELCLEAN_PROMPT, EXTRACT_PREDICTION_PROMPT, safe_format
 from agent.core import DataAnalysisAgent
