@@ -26,7 +26,7 @@ class ReelCleanTool(ToolInterface):
     def description(self) -> str:
         return (
             "影院数据清洗——接收3个Excel文件（<影片名>-落.xlsx、影城明细-<影片名>.xlsx、第3个文件）"
-            "和4个参数（总成本/后台消耗/上一时段/D8百分比），输出3段文案和2个处理后Excel"
+            "和4个参数（总成本/后台消耗/上一时段/今日新增占比），输出3段文案和2个处理后Excel"
         )
 
     @property
@@ -51,10 +51,10 @@ class ReelCleanTool(ToolInterface):
                 "aliases": ["上一时段", "上时段", "之前时段"],
             },
             "d8_pct": {
-                "label": "D8百分比",
+                "label": "今日新增占比",
                 "type": "float",
                 "required": True,
-                "aliases": ["D8百分比", "D8", "D8占比"],
+                "aliases": ["今日新增占比", "今日新增", "新增占比", "D8", "D8百分比", "D8占比"],
             },
             "files": {
                 "label": "Excel文件",
@@ -64,13 +64,47 @@ class ReelCleanTool(ToolInterface):
             },
         }
 
+    # 三个必需文件的识别规则
+    _FILE_TYPES = ["落位表", "影城场次明细", "任务合作明细"]
+
+    @staticmethod
+    def _file_type(fname: str) -> str | None:
+        """根据文件名识别文件类型。"""
+        name = fname.lower()
+        stem = name.rsplit(".", 1)[0] if "." in name else name
+        if stem.endswith("落"):
+            return "落位表"
+        if "影城明细" in name:
+            return "影城场次明细"
+        return "任务合作明细"  # 第三个文件（文件名可能是乱码）
+
+    @classmethod
+    def classify_files(cls, files: list) -> dict:
+        """识别文件列表中已有的类型，返回 {类型: 文件名, ...}。"""
+        result = {}
+        for fname, _ in files:
+            ft = cls._file_type(fname)
+            if ft and ft not in result:  # 每种类型只取第一个
+                result[ft] = fname
+        return result
+
+    def missing_file_types(self, files: list) -> list[str]:
+        """返回缺失的文件类型列表。"""
+        found = self.classify_files(files)
+        return [t for t in self._FILE_TYPES if t not in found]
+
     def validate_params(self, params: dict) -> list[str]:
         missing = []
         for key in ["total_cost", "backend_consume", "prev_actual", "d8_pct"]:
             if key not in params or params[key] is None:
                 missing.append(key)
-        if not params.get("files"):
+        files = params.get("files", [])
+        if not files:
             missing.append("files")
+        elif len(self.classify_files(files)) < 3:
+            # 有文件但不全 — 用独立 key 提示具体缺哪个
+            for mt in self.missing_file_types(files):
+                missing.append(mt)
         return missing
 
     def execute(self, params: dict) -> ToolResult:
@@ -99,9 +133,9 @@ class ReelCleanTool(ToolInterface):
 
             # 组装文案
             full_text = (
-                f"=== 消耗报告 ===\n{result['wenan1']}\n\n"
-                f"=== 开场情况 ===\n{result['wenan2']}\n\n"
-                f"=== 落位预估 ===\n{result['wenan3']}"
+                f"=== 消耗报告 ===\n{result.get('wenan1', '')}\n\n"
+                f"=== 开场情况 ===\n{result.get('wenan2', '')}\n\n"
+                f"=== 落位预估 ===\n{result.get('wenan3', '')}"
             )
 
             # 收集输出文件
@@ -128,6 +162,5 @@ class ReelCleanTool(ToolInterface):
                 error=f"清洗处理失败: {e}",
             )
         finally:
-            # output_dir 中的文件会在发送后被清理
             shutil.rmtree(work_dir, ignore_errors=True)
-            # 注意：output_dir 保留，调用方发完文件后再清理
+            # output_dir 中的文件发送后会在 _send_response 中自动清理

@@ -11,6 +11,7 @@ class ToolResult:
     """工具执行结果"""
     success: bool
     text: str = ""                        # 主文案（发给用户）
+    extra_text: str = ""                  # 第二条文案（单独发送，如总结跟进语）
     files: list[str] = field(default_factory=list)  # 输出文件路径列表
     error: str = ""                       # 失败时的错误描述
 

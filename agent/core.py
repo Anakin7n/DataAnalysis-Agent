@@ -7,6 +7,7 @@ Agent 主循环 — 意图识别 → 参数提取 → 追问/执行 → 回复�
 - 工具执行在独立线程中，发完即返回
 """
 import json
+import re
 import time
 import threading
 import logging
@@ -18,6 +19,7 @@ from agent.prompts import (
     EXTRACT_REELCLEAN_PROMPT,
     EXTRACT_PREDICTION_PROMPT,
     EXTRACT_FEISHU_EXCEL_PROMPT,
+    safe_format,
 )
 from tools.base import ToolResult
 from tools.reelclean_tool import ReelCleanTool
@@ -81,6 +83,15 @@ class DataAnalysisAgent:
         session.touch()
         self._cleanup_expired()
 
+        # 纯文件消息（无文本）— 静默累积，不调 LLM，不回复
+        if not text and files:
+            # 如果意图已确定，检查参数是否刚好补齐，齐了就直接执行
+            if session.intent is not None:
+                session.params["files"] = session.files
+                if not self._has_missing_params(session):
+                    return self._execute_tool(session)
+            return {"text": "", "files": [], "done": False}
+
         # Step 1: 意图识别
         if session.intent is None:
             return self._classify_intent(session, text)
@@ -97,7 +108,7 @@ class DataAnalysisAgent:
     def _classify_intent(self, session: AgentSession, text: str) -> dict:
         """LLM 判断用户想用什么工具。"""
         try:
-            prompt = INTENT_PROMPT.format(user_message=text)
+            prompt = safe_format(INTENT_PROMPT, user_message=text)
             raw = chat("返回纯 JSON，不要 markdown 包裹。", prompt)
             result = json.loads(raw)
         except Exception as e:
@@ -118,9 +129,24 @@ class DataAnalysisAgent:
                 "text": (
                     "我还不太确定您想要做什么，可以再描述一下吗？\n\n"
                     "我能帮你做这些事：\n"
-                    "1️⃣ **数据清洗** — 发送3个Excel文件 + 参数（总成本/后台消耗/上一时段/D8百分比）\n"
-                    "2️⃣ **落位预测** — 告诉我日期、影片占比和大盘场次\n"
-                    "3️⃣ **开场数据提取** — 发送Excel文件链接，帮你生成汇报文案"
+                    "1️⃣ 数据清洗 — 发送3个Excel文件 + 参数（总成本/后台消耗/上一时段/今日新增占比）\n"
+                    "2️⃣ 落位预测 — 告诉我日期、影片占比和大盘场次\n"
+                    "3️⃣ 开场数据提取 — 发送Excel文件链接，帮你生成汇报文案"
+                ),
+                "files": [],
+                "done": False,
+            }
+
+        # 多步骤 — 暂不支持一次处理多种操作
+        if intent == "multi_step":
+            return {
+                "text": (
+                    "检测到您想进行多项操作。目前我一次只能处理一种任务，"
+                    "请先告诉我您想先做哪个：\n"
+                    "1️⃣ 数据清洗 — 清洗影院数据\n"
+                    "2️⃣ 落位预测 — 预测影片排片\n"
+                    "3️⃣ 开场数据提取 — 提取开场数据\n\n"
+                    "完成后可以继续告诉我下一个需求~"
                 ),
                 "files": [],
                 "done": False,
@@ -128,13 +154,80 @@ class DataAnalysisAgent:
 
         session.intent = intent
 
-        # 确认意图
+        # feishu_excel: URL 直接正则提取，累积到 session
+        if intent == "feishu_excel":
+            normalized = text.replace("；", " ").replace("，", " ").replace(",", " ").replace("\n", " ")
+            urls = re.findall(r'https?://\S+', normalized)
+            if urls:
+                existing = session.params.get("urls", [])
+                session.params["urls"] = existing + urls
+
+        # 尝试从同一句话中提取参数（用户可能一句话包含意图+参数）
+        if text:
+            self._try_extract_params_from_text(session, text)
+
+        # 确认意图 — 只提示真正缺失的参数
         tool = TOOLS[intent]
-        return {
-            "text": f"✅ 已识别为【{tool.description.split('——')[0]}】\n请继续提供参数，或者直接告诉我所有信息。",
-            "files": [],
-            "done": False,
-        }
+        # 用 session 当前状态（含已累积的文件）计算真正缺失的参数
+        temp_params = dict(session.params)
+        if session.files:
+            temp_params["files"] = session.files
+        missing = tool.validate_params(temp_params)
+        if missing:
+            received = self._format_received(session)
+            hints = self._missing_params_hint(intent, missing)
+            parts = [f"✅ 已识别为【{tool.description.split('——')[0]}】"]
+            if received:
+                parts.append(f"\n📎 已收到：\n{received}")
+            parts.append(f"\n📋 仍需提供：\n{hints}")
+            return {
+                "text": "\n".join(parts),
+                "files": [],
+                "done": False,
+            }
+        # 参数已齐全 → 先发确认，再后台执行
+        received = self._format_received(session)
+        confirm = f"✅ 已识别为【{tool.description.split('——')[0]}】"
+        if received:
+            confirm += f"\n📎 已收到：\n{received}"
+        return {"text": confirm, "files": [], "done": False, "_deferred": True}
+
+    def _try_extract_params_from_text(self, session: AgentSession, text: str):
+        """从文本中提取参数并写入 session。LLM 失败时静默跳过。
+        用于意图分类后的首轮参数提取，与 _extract_params 不同的是：
+        - 不返回用户可见的错误消息
+        - 不调用 _execute_tool
+        """
+        prompt_template = EXTRACT_PROMPTS.get(session.intent)
+        if not prompt_template:
+            return
+        try:
+            today = dt_date.today().strftime("%Y-%m-%d")
+            prompt = safe_format(prompt_template, user_message=text, today=today)
+            raw = chat("返回纯 JSON，不要 markdown 包裹。", prompt)
+            extract = json.loads(raw)
+        except Exception:
+            return  # LLM 提取失败，静默跳过
+
+        params = extract.get("params", {})
+        for key, value in params.items():
+            if key == "files":
+                continue  # files 来自实际文件上传，不用 LLM 的布尔值
+            if value is None:
+                continue
+            if isinstance(value, (int, float)) and value == 0:
+                continue  # LLM 有时返回 0 代替 null，跳过
+            if key not in session.params:
+                session.params[key] = value
+            elif key == "movies" and isinstance(value, list):
+                existing = {m["name"]: m for m in session.params["movies"]}
+                for new_m in value:
+                    name = new_m.get("name")
+                    if name and name in existing:
+                        if new_m.get("share") is not None:
+                            existing[name]["share"] = new_m["share"]
+                    elif name:
+                        session.params["movies"].append(new_m)
 
     def _extract_params(self, session: AgentSession, text: str) -> dict:
         """LLM 从自然语言中提取参数。"""
@@ -142,10 +235,23 @@ class DataAnalysisAgent:
         if not prompt_template:
             return self._fallback_error("内部错误：未知意图。")
 
+        # feishu_excel: 用正则提取 URL 并累积，不依赖 LLM
+        if session.intent == "feishu_excel":
+            normalized = text.replace("；", " ").replace("，", " ").replace(",", " ").replace("\n", " ")
+            new_urls = re.findall(r'https?://\S+', normalized)
+            if new_urls:
+                existing = session.params.get("urls", [])
+                existing_set = set(existing)
+                for u in new_urls:
+                    if u not in existing_set:
+                        existing.append(u)
+                        existing_set.add(u)
+                session.params["urls"] = existing
+
         try:
             # 注入当天日期用于解析相对日期
             today = dt_date.today().strftime("%Y-%m-%d")
-            prompt = prompt_template.format(user_message=text, today=today)
+            prompt = safe_format(prompt_template, user_message=text, today=today)
             raw = chat("返回纯 JSON，不要 markdown 包裹。", prompt)
             extract = json.loads(raw)
         except Exception as e:
@@ -165,13 +271,34 @@ class DataAnalysisAgent:
             if "files" not in missing:
                 missing.append("files")
 
-        # 更新 session
+        # 更新 session（files 跳过 LLM 的布尔值，用实际文件替换）
         for key, value in params.items():
-            if value is not None and key not in session.params:
+            if key == "files":
+                continue  # LLM 返回的 files 只是 true/false 指示，不覆盖实际文件
+            if value is None:
+                continue
+            if key not in session.params:
                 session.params[key] = value
+            elif key == "movies" and isinstance(value, list):
+                # 影片列表需要合并：用新的占比更新已有影片
+                existing = {m["name"]: m for m in session.params["movies"]}
+                for new_m in value:
+                    name = new_m.get("name")
+                    if name and name in existing:
+                        if new_m.get("share") is not None:
+                            existing[name]["share"] = new_m["share"]
+                    elif name:
+                        session.params["movies"].append(new_m)
+            elif key == "urls" and isinstance(value, list):
+                # URL 列表合并去重
+                existing_set = set(session.params.get("urls", []))
+                for u in value:
+                    if u not in existing_set:
+                        session.params["urls"].append(u)
+                        existing_set.add(u)
 
-        # 补上文件
-        if session.files and "files" not in session.params:
+        # 补上实际文件
+        if session.files:
             session.params["files"] = session.files
 
         # 重新计算缺失
@@ -179,20 +306,19 @@ class DataAnalysisAgent:
 
         if actual_missing:
             tool_name = tool.description.split("——")[0]
+            received = self._format_received(session)
             hints = self._missing_params_hint(session.intent, actual_missing)
+            parts = [f"📋 【{tool_name}】"]
+            if received:
+                parts.append(f"\n📎 已收到：\n{received}")
+            parts.append(f"\n📋 仍需提供：\n{hints}")
             return {
-                "text": f"📋 【{tool_name}】还需要以下信息：\n{hints}",
+                "text": "\n".join(parts),
                 "files": [],
                 "done": False,
             }
 
-        # 参数齐全 → 确认并执行
-        try:
-            confirm = tool.format_params_for_display(session.params)
-        except Exception:
-            confirm = json.dumps(session.params, ensure_ascii=False, indent=2)
-
-        # 直接执行，不再确认（省一步交互）
+        # 参数齐全 → 直接执行，不再确认（省一步交互）
         return self._execute_tool(session)
 
     def _execute_tool(self, session: AgentSession) -> dict:
@@ -231,9 +357,20 @@ class DataAnalysisAgent:
 
         return {
             "text": result.text,
+            "extra_text": result.extra_text,
             "files": result.files,
             "done": True,
         }
+
+    # ── 公开接口 ──
+
+    def execute_deferred(self, user_id: str) -> dict:
+        """执行延迟任务：确认消息已发送后，运行工具并返回结果。"""
+        with self._lock:
+            session = self._sessions.get(user_id)
+        if not session or session.intent is None:
+            return {"text": "", "files": [], "done": True}
+        return self._execute_tool(session)
 
     # ── 辅助方法 ──
 
@@ -266,17 +403,72 @@ class DataAnalysisAgent:
     def _missing_params_hint(self, intent: str, missing: list[str]) -> str:
         """为缺失参数生成友好的提示。"""
         hints = {
-            "total_cost": "• **总成本** — 如 300000 或 30万",
-            "backend_consume": "• **后台消耗** — 如 32.8 或 32.8%",
-            "prev_actual": "• **上一时段实际消耗** — 如 83.4 或 83.4%",
-            "d8_pct": "• **D8百分比** — 如 4.4 或 4.4%",
-            "files": "• **Excel文件** — 请在群聊中发送3个Excel文件",
-            "date": "• **预测日期** — 如 6.15 或 明天",
-            "movies": "• **影片占比列表** — 如 封神2:17.6%, 哪吒:8.2%",
-            "dapan_total": "• **大盘场次** — 如 42万 或 420000",
-            "urls": "• **Excel文件链接** — 请发送文件链接",
+            "total_cost": "• 总成本 — 如 300000 或 30万",
+            "backend_consume": "• 后台消耗 — 如 32.8 或 32.8%",
+            "prev_actual": "• 上一时段实际消耗 — 如 83.4 或 83.4%",
+            "d8_pct": "• 今日新增占比 — 如 4.4 或 4.4%",
+            "files": (
+                "• Excel文件 — 需发送3个：落位表、影城场次明细、任务合作明细"
+            ),
+            "落位表": "• 落位表",
+            "影城场次明细": "• 影城场次明细",
+            "任务合作明细": "• 任务合作明细",
+            "date": "• 预测日期 — 如 6.15 或 明天",
+            "movies": "• 影片及今日新增占比 — 如 封神2:17.6%, 哪吒:8.2%",
+            "dapan_total": "• 大盘场次 — 如 42万 或 420000",
+            "urls": "• Excel文件链接 — 请发送2个文件链接",
         }
         return "\n".join(hints.get(m, f"• {m}") for m in missing)
+
+    def _format_received(self, session: AgentSession) -> str:
+        """生成「已收到」确认信息，列出用户已提供的参数。"""
+        intent = session.intent
+        lines = []
+
+        if intent == "reelclean":
+            labels = {
+                "total_cost": "总成本", "backend_consume": "后台消耗",
+                "prev_actual": "上一时段实际消耗", "d8_pct": "今日新增占比",
+            }
+            for key, label in labels.items():
+                val = session.params.get(key)
+                if val is not None:
+                    if key == "total_cost":
+                        lines.append(f"• {label}：{val:,.0f}")
+                    else:
+                        lines.append(f"• {label}：{val}%")
+            if session.files:
+                from tools.reelclean_tool import ReelCleanTool
+                found = ReelCleanTool.classify_files(session.files)
+                if found:
+                    lines.append(f"• 文件：{'、'.join(found.keys())}（共{len(session.files)}个）")
+
+        elif intent == "prediction":
+            if session.params.get("date"):
+                lines.append(f"• 预测日期：{session.params['date']}")
+            movies = session.params.get("movies", [])
+            if movies:
+                names = [m["name"] for m in movies if m.get("name")]
+                shares = [m for m in movies if m.get("share") is not None]
+                if names:
+                    share_str = ""
+                    if shares:
+                        share_str = "（" + "、".join(
+                            f"{m['name']}:{m['share']*100:.1f}%" for m in shares
+                        ) + "）"
+                    lines.append(f"• 影片：{'、'.join(names)}{share_str}")
+            if session.params.get("dapan_total"):
+                lines.append(f"• 大盘场次：{session.params['dapan_total']:,}")
+
+        elif intent == "feishu_excel":
+            urls = session.params.get("urls", [])
+            if urls:
+                if len(urls) == 1:
+                    lines.append(f"• 链接：1 个（还需 1 个）")
+                else:
+                    lines.append(f"• 链接：{len(urls)} 个")
+
+        return "\n".join(lines) if lines else ""
 
     def _fallback_error(self, msg: str) -> dict:
         return {"text": f"❌ {msg}", "files": [], "done": True}

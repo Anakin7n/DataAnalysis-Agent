@@ -5,7 +5,7 @@
 import json
 import sys
 from agent.llm_client import chat
-from agent.prompts import INTENT_PROMPT, EXTRACT_REELCLEAN_PROMPT, EXTRACT_PREDICTION_PROMPT
+from agent.prompts import INTENT_PROMPT, EXTRACT_REELCLEAN_PROMPT, EXTRACT_PREDICTION_PROMPT, safe_format
 from agent.core import DataAnalysisAgent
 
 
@@ -40,7 +40,7 @@ def test_intent():
 
     passed = 0
     for text, expected in cases:
-        prompt = INTENT_PROMPT.format(user_message=text)
+        prompt = safe_format(INTENT_PROMPT, user_message=text)
         try:
             raw = chat("返回纯 JSON。", prompt)
             result = json.loads(raw)
@@ -64,7 +64,7 @@ def test_extract():
 
     # ReelClean 参数
     text = "D8是4.4，后台消耗32.8%，总成本300000，上一时段83.4"
-    prompt = EXTRACT_REELCLEAN_PROMPT.format(user_message=text)
+    prompt = safe_format(EXTRACT_REELCLEAN_PROMPT, user_message=text)
     try:
         raw = chat("返回纯 JSON。", prompt)
         result = json.loads(raw)
@@ -80,7 +80,7 @@ def test_extract():
 
     # Prediction 参数
     text = "预测6月15号排片，封神2:17.6%，哪吒=8.2%，大盘42万场"
-    prompt = EXTRACT_PREDICTION_PROMPT.format(user_message=text, today="2026-06-10")
+    prompt = safe_format(EXTRACT_PREDICTION_PROMPT, user_message=text, today="2026-06-10")
     try:
         raw = chat("返回纯 JSON。", prompt)
         result = json.loads(raw)

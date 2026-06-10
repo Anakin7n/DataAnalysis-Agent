@@ -41,7 +41,7 @@ class FeishuExcelTool(ToolInterface):
     def validate_params(self, params: dict) -> list[str]:
         missing = []
         urls = params.get("urls", [])
-        if not urls or len(urls) == 0:
+        if len(urls) < 2:
             missing.append("urls")
         return missing
 
@@ -67,12 +67,12 @@ class FeishuExcelTool(ToolInterface):
                 )
 
             main_msg, summary_msg = result
-            full_text = f"{main_msg}\n\n{summary_msg}"
 
             return ToolResult(
                 success=True,
-                text=full_text,
-                files=[],  # 此工具不产生文件输出
+                text=main_msg,
+                extra_text=summary_msg,
+                files=[],
             )
 
         except ImportError as e:

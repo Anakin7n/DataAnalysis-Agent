@@ -91,11 +91,9 @@ def send_file(chat_id: str, file_path: str, file_name: str):
 def download_file_from_message(message_id: str, file_key: str) -> bytes:
     """从飞书消息中下载文件内容。"""
     headers = {"Authorization": f"Bearer {_get_token()}"}
-    resp = requests.get(
-        f"{FEISHU_DOMAIN}/open-apis/im/v1/messages/{message_id}/resources/{file_key}",
-        headers=headers,
-        params={"type": "file"},
-        timeout=60,
-    )
-    resp.raise_for_status()
+    url = f"{FEISHU_DOMAIN}/open-apis/im/v1/messages/{message_id}/resources/{file_key}"
+    resp = requests.get(url, headers=headers, params={"type": "file"}, timeout=60)
+    if resp.status_code != 200:
+        detail = resp.text[:500] if resp.text else "(无响应体)"
+        raise Exception(f"下载文件失败 HTTP {resp.status_code}: {detail}")
     return resp.content

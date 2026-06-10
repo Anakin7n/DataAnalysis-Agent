@@ -38,10 +38,10 @@ class PredictionTool(ToolInterface):
                 "aliases": ["日期", "预测日期", "哪天"],
             },
             "movies": {
-                "label": "影片列表",
+                "label": "影片及今日新增占比",
                 "type": "list",
                 "required": True,
-                "aliases": ["影片", "电影", "片名"],
+                "aliases": ["影片", "电影", "片名", "今日新增占比", "占比"],
             },
             "dapan_total": {
                 "label": "大盘场次",
@@ -51,11 +51,47 @@ class PredictionTool(ToolInterface):
             },
         }
 
+    @staticmethod
+    def _resolve_movie_names(mc, user_names: list[str], date_str: str) -> list[str]:
+        """用 LLM 将用户输入的简称匹配为猫眼完整影片名。
+        优先匹配预测日期当天会上映的版本（如同系列多部的选择）。
+        """
+        import json as _json
+        from agent.llm_client import chat
+
+        all_movies = mc.fetch_movies()
+        all_names = [m["name"] for m in all_movies if m["name"]]
+
+        # 已有精确匹配的跳过 LLM
+        if all(n in all_names for n in user_names):
+            return user_names
+
+        prompt = (
+            "将用户输入的影片简称匹配为猫眼平台完整名称。\n\n"
+            f"预测日期：{date_str}\n"
+            f"候选影片：{_json.dumps(all_names, ensure_ascii=False)}\n"
+            f"用户输入：{_json.dumps(user_names, ensure_ascii=False)}\n\n"
+            "规则：\n"
+            "1. 每个简称匹配一个完整名称\n"
+            "2. 同系列电影（如熊出没），优先匹配预测日期附近上映的版本\n"
+            "3. 返回 JSON 数组，顺序与用户输入一致\n\n"
+            "只返回 JSON 数组，不要其他内容。"
+        )
+        try:
+            raw = chat("返回纯 JSON 数组，不要 markdown 包裹。", prompt)
+            resolved = _json.loads(raw)
+            if isinstance(resolved, list) and len(resolved) == len(user_names):
+                return resolved
+        except Exception:
+            pass
+        return user_names  # LLM 失败则降级返回原名
+
     def validate_params(self, params: dict) -> list[str]:
         missing = []
         if not params.get("date"):
             missing.append("date")
-        if not params.get("movies"):
+        movies = params.get("movies", [])
+        if not movies or any(m.get("share") is None for m in movies):
             missing.append("movies")
         if not params.get("dapan_total"):
             missing.append("dapan_total")
@@ -65,17 +101,25 @@ class PredictionTool(ToolInterface):
         from scraper.maoyan import MaoyanClient
         from excel.generator import generate_excel
         from bot.cards import summary as format_summary, result as format_result
-        from datetime import date as dt_date
 
         try:
             date_str = params["date"]           # "6.15"
             movies = params["movies"]            # [{"name": "封神2", "share": 0.176}, ...]
             dapan_total = params["dapan_total"]  # 420000
 
-            # 调用猫眼爬虫
             mc = MaoyanClient()
-            movie_names = [m["name"] for m in movies]
-            matched, total_show_count = mc.fetch_by_date(movie_names, date_str)
+
+            # LLM 模糊匹配：将用户简称映射为猫眼完整片名
+            user_names = [m["name"] for m in movies]
+            resolved = self._resolve_movie_names(mc, user_names, date_str)
+
+            # 构建完整片名→占比的映射（按顺序对应）
+            name_share = {}
+            for i, full_name in enumerate(resolved):
+                if i < len(movies) and movies[i].get("share") is not None:
+                    name_share[full_name] = movies[i]["share"]
+
+            matched, total_show_count = mc.fetch_by_date(resolved, date_str)
 
             if not matched:
                 return ToolResult(
@@ -86,10 +130,8 @@ class PredictionTool(ToolInterface):
 
             # 填充用户提供的累计占比
             for m in matched:
-                for user_m in movies:
-                    if user_m["name"] == m["name"]:
-                        m["cumulative_share"] = user_m["share"]
-                        break
+                if m["name"] in name_share:
+                    m["cumulative_share"] = name_share[m["name"]]
 
             # 生成 Excel
             excel_bytes = generate_excel(

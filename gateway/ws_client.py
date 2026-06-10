@@ -250,6 +250,9 @@ class FeishuWsClient:
                 log.info(f"[消息] user={user_id[:12]} text={text[:80]}")
                 response = self._agent.handle_message(user_id, chat_id, text)
                 self._send_response(chat_id, response)
+                if response.get("_deferred"):
+                    result = self._agent.execute_deferred(user_id)
+                    self._send_response(chat_id, result)
                 return
 
             # ── 文件消息 ──
@@ -271,6 +274,9 @@ class FeishuWsClient:
                 files = [(file_name, file_bytes)]
                 response = self._agent.handle_message(user_id, chat_id, "", files)
                 self._send_response(chat_id, response)
+                if response.get("_deferred"):
+                    result = self._agent.execute_deferred(user_id)
+                    self._send_response(chat_id, result)
                 return
 
             # 非文本非文件消息
@@ -282,17 +288,31 @@ class FeishuWsClient:
     def _send_response(self, chat_id: str, response: dict):
         """将 Agent 返回的 response dict 发送到飞书。"""
         text = response.get("text", "")
+        extra_text = response.get("extra_text", "")
         files = response.get("files", [])
 
-        if text:
-            # 飞书单条消息最多约 15000 字符，长文本分段
-            if len(text) > 8000:
-                parts = [text[i:i+8000] for i in range(0, len(text), 8000)]
+        def _send_text_safe(msg: str):
+            """发送单条文本，超长则分段。"""
+            if not msg:
+                return
+            if len(msg) > 8000:
+                parts = [msg[i:i+8000] for i in range(0, len(msg), 8000)]
                 for part in parts:
-                    send_text(chat_id, part)
+                    try:
+                        send_text(chat_id, part)
+                    except Exception as e:
+                        log.error(f"发送文本失败: {e}")
                     time.sleep(0.3)
             else:
-                send_text(chat_id, text)
+                try:
+                    send_text(chat_id, msg)
+                except Exception as e:
+                    log.error(f"发送文本失败: {e}")
+
+        _send_text_safe(text)
+        if extra_text:
+            time.sleep(0.5)  # 两条消息之间稍作停顿
+            _send_text_safe(extra_text)
 
         for fpath in files:
             if os.path.exists(fpath):
@@ -302,6 +322,16 @@ class FeishuWsClient:
                     time.sleep(0.3)
                 except Exception as e:
                     log.error(f"发送文件失败 {fname}: {e}")
+                finally:
+                    # 清理临时文件，避免磁盘泄漏
+                    try:
+                        os.remove(fpath)
+                        # 如果父目录是空的临时目录，也一并清理
+                        parent = os.path.dirname(fpath)
+                        if os.path.isdir(parent) and not os.listdir(parent):
+                            os.rmdir(parent)
+                    except OSError:
+                        pass
 
     def _dispatch_sync(self, event_data: dict):
         """同步包装，供 executor 调用。"""

@@ -7,6 +7,14 @@ Prompt 模板 — 纯字符串拼接，不用模板引擎。
   CONFIRM_PROMPT — 将参数格式化为用户确认消息
 """
 
+
+def safe_format(template: str, **kwargs) -> str:
+    """安全的模板填充：先转义所有值中的花括号，再调用 .format()。
+    防止用户消息中的 { } 导致 KeyError 崩溃。
+    """
+    escaped = {k: str(v).replace("{", "{{").replace("}", "}}") for k, v in kwargs.items()}
+    return template.format(**escaped)
+
 # ── 意图分类 ──
 # 输入: user_message
 # 输出: {"intent": "reelclean|prediction|feishu_excel|unknown", "confidence": 0.0-1.0}
@@ -39,7 +47,7 @@ EXTRACT_REELCLEAN_PROMPT = """从用户消息中提取影院数据清洗的参�
 - total_cost: 总成本（数字，如 300000）。用户可能说"总成本30万""成本300000""30w"
 - backend_consume: 后台消耗（百分比数字，如 32.8）。用户可能说"后台消耗32.8%""后台32.8"
 - prev_actual: 上一时段实际消耗（百分比数字，如 83.4）。用户可能说"上一时段83.4""上时段83.4%"
-- d8_pct: D8百分比（数字，如 4.4）。用户可能说"D8是4.4""D8百分比4.4%""D8:4.4"
+- d8_pct: 今日新增占比（数字，如 4.4）。用户可能说"今日新增4.4""今日新增占比4.4%""新增占比4.4""D8是4.4""D8:4.4"
 - files: 用户是否提到了文件/Excel。有则为 true 否则 false（不要求数字）
 
 提取规则：
@@ -59,8 +67,9 @@ EXTRACT_PREDICTION_PROMPT = """从用户消息中提取影片落位预测的参�
 - date: 预测日期。如用户说"6.15""6月15日""明天""后天"，统一转为 "M.D" 格式（如"6.15"）
   * "明天"：当前日期 + 1天 → 转为 M.D
   * "后天"：当前日期 + 2天 → 转为 M.D
-- movies: 影片列表，格式 [{{"name": "片名", "share": 0.176}}, ...]
+- movies: 影片及今日新增占比，格式 [{{"name": "片名", "share": 0.176}}, ...]
   * 占比支持：17.6% → 0.176, 0.176 → 0.176, 17.6 → 0.176（>1 则除以 100）
+  * 如果用户只说了片名没给占比，share 填 null
   * 分隔符可能是：逗号、中文逗号、分号、顿号、换行
 - dapan_total: 大盘场次（整数）。如"42万""420000""四十二万"
 
@@ -71,15 +80,16 @@ EXTRACT_PREDICTION_PROMPT = """从用户消息中提取影片落位预测的参�
 返回 JSON（不要其他内容）：
 {{"params": {{"date": "M.D格式"或null, "movies": [{{"name": "...", "share": 小数}}]或[], "dapan_total": 整数或null}}, "missing": ["缺失参数名"...]}}"""
 
-EXTRACT_FEISHU_EXCEL_PROMPT = """检查用户消息中是否包含 Excel 文件链接。
+EXTRACT_FEISHU_EXCEL_PROMPT = """从用户消息中提取 Excel 文件链接。
 
 - urls: 从文本中提取所有 https?:// 开头的 URL 列表
-- 如果文本中没有 URL，urls 为空列表
+- 如果找到了 URL，missing 为空列表 []；如果没找到，urls 为空列表，missing 为 ["urls"]
 
 用户消息：{user_message}
 
-返回 JSON（不要其他内容）：
-{{"params": {{"urls": ["url1", "url2"...]}}, "missing": ["urls"]}}"""
+返回 JSON（不要其他内容）。示例：
+找到链接时：{{"params": {{"urls": ["https://example.com/file.xlsx"]}}, "missing": []}}
+未找到时：{{"params": {{"urls": []}}, "missing": ["urls"]}}"""
 
 
 # ── 确认消息格式 ──
