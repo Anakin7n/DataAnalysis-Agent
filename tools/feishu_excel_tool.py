@@ -1,6 +1,6 @@
 """
-FeishuExcelTool — 开场数据提取。
-封装 feishu-bot 的核心逻辑：Excel URL → 下载 → 解析 → 生成汇报文案。
+FeishuExcelTool — 分时汇报。
+封装 feishu-bot 的核心逻辑：Excel URL → 下载 → 解析 → 生成排片情况汇报文案。
 """
 import sys
 from pathlib import Path
@@ -22,9 +22,9 @@ class FeishuExcelTool(ToolInterface):
     @property
     def description(self) -> str:
         return (
-            "开场数据提取——用户发送Excel文件链接（飞书文档链接），"
-            "自动下载、解析文件中的开场数据（场次数/劣势影城数/排片占比等），"
-            "生成结构化的数据汇报文案"
+            "分时汇报——用户发送Excel文件链接（飞书文档链接），"
+            "自动下载、解析目标影片未来两天的排片数据（场次数/劣势影城数/排片占比等），"
+            "生成结构化的分时汇报文案"
         )
 
     @property

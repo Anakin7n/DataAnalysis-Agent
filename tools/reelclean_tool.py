@@ -1,6 +1,6 @@
 """
-ReelCleanTool — 影院数据清洗。
-封装 ReelClean-bot 的核心逻辑：3个Excel → 清洗 → 文案+处理后的文件。
+ReelCleanTool — 地面任务分析（消耗/催场/落位）。
+封装 ReelClean-bot 的核心逻辑：3个Excel → 分析 → 文案+处理后文件。
 """
 import os
 import shutil
@@ -25,7 +25,8 @@ class ReelCleanTool(ToolInterface):
     @property
     def description(self) -> str:
         return (
-            "影院数据清洗——接收3个Excel文件（<影片名>-落.xlsx、影城明细-<影片名>.xlsx、第3个文件）"
+            "地面任务分析——消耗报告/催场情况/落位预估——接收3个Excel文件"
+            "（<影片名>-落.xlsx、影城明细-<影片名>.xlsx、第3个文件）"
             "和4个参数（总成本/后台消耗/上一时段/今日新增占比），输出3段文案和2个处理后Excel"
         )
 

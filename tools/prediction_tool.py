@@ -1,5 +1,5 @@
 """
-PredictionTool — 影片落位预测。
+PredictionTool — 排片占比预测。
 封装 Prediction-Bot 的核心逻辑：猫眼排片数据获取 + Excel 生成。
 """
 import sys
@@ -24,8 +24,8 @@ class PredictionTool(ToolInterface):
     @property
     def description(self) -> str:
         return (
-            "影片落位预测——根据用户输入的电影名称和累计新增占比，"
-            "从猫眼获取当前排片数据，计算落位占比并生成预测Excel"
+            "排片占比预测——根据用户输入的电影名称和累计新增占比，"
+            "从猫眼获取当前排片数据，预测目标日期各影片（含竞品）的排片占比并生成预测Excel"
         )
 
     @property

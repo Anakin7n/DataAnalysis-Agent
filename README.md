@@ -17,9 +17,9 @@ Agent 本身不做数据处理——它充当路由和参数提取层，实际�
 
 | 工具 | 输入 | 输出 |
 |------|------|------|
-| **数据清洗** (ReelClean) | 3 个 Excel + 4 个参数（总成本/后台消耗/上一时段/今日新增占比） | 3 段文案（消耗报告、开场情况、落位预估）+ 2 个处理后的 Excel |
-| **落位预测** (Prediction) | 日期 + 影片及新增占比 + 大盘场次 | 预测结果总结 + 各影片落位占比文案 + 1 个预测 Excel |
-| **开场数据提取** (Feishu Excel) | 2 个 Excel 文件链接 | 结构化数据汇报文案（开场情况、劣势影城、排片占比）+ 跟进语 |
+| **地面任务分析** (ReelClean) | 3 个 Excel + 4 个参数（总成本/后台消耗/上一时段/今日新增占比） | 消耗报告 + 催场情况 + 落位预估（3 段文案）+ 2 个处理后 Excel |
+| **排片占比预测** (Prediction) | 日期 + 影片及新增占比 + 大盘场次 | 预测结果总结 + 各影片（含竞品）落位占比文案 + 1 个预测 Excel |
+| **分时汇报** (Feishu Excel) | 2 个 Excel 文件链接 | 目标影片未来两天排片情况汇报文案 + 跟进语 |
 
 ## 对话流程
 
@@ -112,9 +112,9 @@ SESSION_TIMEOUT=600
 LOG_LEVEL=INFO
 ```
 
-### 6. 安装 Excel（数据清洗工具需要）
+### 6. 安装 Excel（地面任务分析需要）
 
-数据清洗工具使用 `xlwings` 写入 Excel 公式，要求运行机器上**安装了 Microsoft Excel**。落位预测和开场数据提取不需要 Excel。
+地面任务分析使用 `xlwings` 写入 Excel 公式，要求运行机器上**安装了 Microsoft Excel**。排片占比预测和分时汇报不需要 Excel。
 
 ## 启动
 
@@ -140,9 +140,9 @@ DataAnalysis-Agent/
 │   └── prompts.py             # Prompt 模板（意图分类 + 3 个参数提取）
 ├── tools/
 │   ├── base.py                # ToolResult + ToolInterface
-│   ├── reelclean_tool.py      # 影院数据清洗
-│   ├── prediction_tool.py     # 影片落位预测
-│   └── feishu_excel_tool.py   # 开场数据提取
+│   ├── reelclean_tool.py      # 地面任务分析（消耗/催场/落位）
+│   ├── prediction_tool.py     # 排片占比预测
+│   └── feishu_excel_tool.py   # 分时汇报
 ├── gateway/
 │   ├── ws_client.py           # 飞书 WebSocket 客户端
 │   └── feishu_api.py          # 飞书 REST API
@@ -163,9 +163,9 @@ DataAnalysis-Agent/
 | `websockets` | 飞书 WebSocket 长连接 |
 | `requests` | HTTP 请求 |
 | `pandas` / `openpyxl` | Excel 数据处理 |
-| `xlwings` | Excel 公式写入（数据清洗，需安装 Excel） |
-| `numpy` | 数值计算（数据清洗） |
-| `playwright` | 猫眼排片数据爬取（落位预测） |
+| `xlwings` | Excel 公式写入（地面任务分析，需安装 Excel） |
+| `numpy` | 数值计算（地面任务分析） |
+| `playwright` | 猫眼排片数据爬取（排片占比预测） |
 | `python-dotenv` | 环境变量管理 |
 
 ## 三个 Bot 原始项目
@@ -190,8 +190,8 @@ DataAnalysis-Agent/
 |------|---------|---------|
 | LLM 调用失败 | API Key 未配或余额不足 | 检查 `.env` 中 `DEEPSEEK_API_KEY`；运行 `test_agent.py` 验证连通性 |
 | 飞书 WebSocket 连不上 | App ID/Secret 错误 | 检查飞书应用是否已发布并开通了"机器人"和"事件订阅"能力 |
-| 数据清洗报"文件识别失败" | 文件名不匹配 | 3 个文件需命名为：`<影片名>-落.xlsx`、`影城明细-<影片名>.xlsx` 及第 3 个文件 |
-| 落位预测报"未获取到排片数据" | 影片名与猫眼不一致 | 尝试使用与猫眼一致的完整片名，或检查日期是否在可查询范围内 |
-| 开场数据提取报"未找到数据 Sheet" | Excel 结构不符 | 文件需包含"综拓开场数据基础模板2"或含"综拓""开场数据"关键词的 Sheet |
-| `xlwings` 报错 | 机器未安装 Excel | 数据清洗依赖 Excel 应用程序，需在装有 Excel 的 Windows 上运行 |
+| 地面任务分析报"文件识别失败" | 文件名不匹配 | 3 个文件需命名为：`<影片名>-落.xlsx`、`影城明细-<影片名>.xlsx` 及第 3 个文件 |
+| 排片占比预测报"未获取到排片数据" | 影片名与猫眼不一致 | 尝试使用与猫眼一致的完整片名，或检查日期是否在可查询范围内 |
+| 分时汇报报"未找到数据 Sheet" | Excel 结构不符 | 文件需包含"综拓开场数据基础模板2"或含"综拓""开场数据"关键词的 Sheet |
+| `xlwings` 报错 | 机器未安装 Excel | 地面任务分析依赖 Excel 应用程序，需在装有 Excel 的 Windows 上运行 |
 | `playwright` 报"Executable doesn't exist" | 浏览器未安装 | 运行 `.venv\Scripts\playwright install chromium` |

@@ -34,7 +34,7 @@ def main():
     log.info("=" * 50)
     log.info("DataAnalysis-Agent 启动中...")
     log.info(f"飞书 App ID: {FEISHU_APP_ID[:10]}...")
-    log.info("工具: 数据清洗 | 落位预测 | 开场数据提取")
+    log.info("工具: 地面任务分析 | 排片占比预测 | 分时汇报")
     log.info("=" * 50)
 
     agent = DataAnalysisAgent()

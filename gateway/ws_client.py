@@ -244,7 +244,7 @@ class FeishuWsClient:
                 if not text:
                     log.info(f"[事件] 仅@机器人无内容: {original[:80]}")
                     # 仅 @ 了机器人但没说话，给个引导
-                    send_text(chat_id, "你好！我是数据处理助手，可以帮你：\n1) 清洗影院数据\n2) 预测影片落位\n3) 提取开场数据\n\n直接告诉我需求即可~")
+                    send_text(chat_id, "你好！我是数据处理助手，可以帮你：\n1) 地面任务分析（消耗/催场/落位）\n2) 排片占比预测\n3) 分时汇报\n\n直接告诉我需求即可~")
                     return
 
                 log.info(f"[消息] user={user_id[:12]} text={text[:80]}")
