@@ -83,13 +83,28 @@ class DataAnalysisAgent:
         session.touch()
         self._cleanup_expired()
 
-        # 纯文件消息（无文本）— 静默累积，不调 LLM，不回复
+        # 纯文件消息（无文本）— 静默累积，不调 LLM，但需给用户反馈
         if not text and files:
-            # 如果意图已确定，检查参数是否刚好补齐，齐了就直接执行
             if session.intent is not None:
                 session.params["files"] = session.files
-                if not self._has_missing_params(session):
-                    return self._execute_tool(session)
+                tool = TOOLS[session.intent]
+                tool_name = tool.description.split("——")[0]
+                missing = tool.validate_params(session.params)
+                if missing:
+                    received = self._format_received(session)
+                    hints = self._missing_params_hint(session.intent, missing)
+                    parts = [f"📎 已收到文件【{tool_name}】"]
+                    if received:
+                        parts.append(f"\n📎 已收到：\n{received}")
+                    parts.append(f"\n📋 仍需提供：\n{hints}")
+                    return {"text": "\n".join(parts), "files": [], "done": False}
+                else:
+                    received = self._format_received(session)
+                    parts = [f"✅ 收到文件，参数已齐全【{tool_name}】"]
+                    if received:
+                        parts.append(f"\n📎 已收到：\n{received}")
+                    parts.append("\n⏳ 正在处理...")
+                    return {"text": "\n".join(parts), "files": [], "done": False, "_deferred": True}
             return {"text": "", "files": [], "done": False}
 
         # Step 1: 意图识别
@@ -318,8 +333,15 @@ class DataAnalysisAgent:
                 "done": False,
             }
 
-        # 参数齐全 → 直接执行，不再确认（省一步交互）
-        return self._execute_tool(session)
+        # 参数齐全 → 先发确认，再后台执行
+        tool = TOOLS[session.intent]
+        tool_name = tool.description.split("——")[0]
+        received = self._format_received(session)
+        parts = [f"✅ 参数已齐全【{tool_name}】"]
+        if received:
+            parts.append(f"\n📎 已收到：\n{received}")
+        parts.append("\n⏳ 正在处理...")
+        return {"text": "\n".join(parts), "files": [], "done": False, "_deferred": True}
 
     def _execute_tool(self, session: AgentSession) -> dict:
         """调用工具，格式化结果。"""
