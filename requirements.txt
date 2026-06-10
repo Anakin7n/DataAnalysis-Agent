@@ -1,0 +1,20 @@
+# 飞书 WebSocket 长连接
+websockets>=14.0
+
+# HTTP 请求
+requests>=2.32
+
+# LLM API (DeepSeek via OpenAI SDK)
+openai>=1.50
+
+# 数据处理 (ReelClean / Feishu)
+pandas>=2.2
+openpyxl>=3.1
+xlwings>=0.33
+numpy>=2.0
+
+# 浏览器自动化 (Prediction 猫眼爬虫)
+playwright>=1.48
+
+# 环境变量
+python-dotenv>=1.0

@@ -1,0 +1,87 @@
+"""
+FeishuExcelTool — 开场数据提取。
+封装 feishu-bot 的核心逻辑：Excel URL → 下载 → 解析 → 生成汇报文案。
+"""
+import sys
+from pathlib import Path
+
+# 引入 feishu-bot 的核心模块
+_FEISHU_BOT_DIR = Path(r"D:\feishu-bot")
+if str(_FEISHU_BOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_FEISHU_BOT_DIR))
+
+from tools.base import ToolInterface, ToolResult
+
+
+class FeishuExcelTool(ToolInterface):
+
+    @property
+    def name(self) -> str:
+        return "feishu_excel"
+
+    @property
+    def description(self) -> str:
+        return (
+            "开场数据提取——用户发送Excel文件链接（飞书文档链接），"
+            "自动下载、解析文件中的开场数据（场次数/劣势影城数/排片占比等），"
+            "生成结构化的数据汇报文案"
+        )
+
+    @property
+    def param_schema(self) -> dict:
+        return {
+            "urls": {
+                "label": "Excel文件链接",
+                "type": "list",
+                "required": True,
+                "aliases": ["链接", "URL", "文件", "地址"],
+            },
+        }
+
+    def validate_params(self, params: dict) -> list[str]:
+        missing = []
+        urls = params.get("urls", [])
+        if not urls or len(urls) == 0:
+            missing.append("urls")
+        return missing
+
+    def execute(self, params: dict) -> ToolResult:
+        from main import process_urls
+
+        try:
+            urls = params["urls"]
+
+            # 调用 feishu-bot 核心处理逻辑
+            result = process_urls(urls)
+
+            if result is None:
+                return ToolResult(
+                    success=False,
+                    error=(
+                        "处理失败，请确认：\n"
+                        "1. 提供了至少2个Excel文件链接\n"
+                        "2. 文件名格式正确（如：影片名(2024-06-10+08:00-...)）\n"
+                        "3. Excel中包含「综拓开场数据基础模板2」或类似Sheet\n"
+                        "4. Sheet中包含「场次数」「劣势影城数」「排片占比」等列"
+                    ),
+                )
+
+            main_msg, summary_msg = result
+            full_text = f"{main_msg}\n\n{summary_msg}"
+
+            return ToolResult(
+                success=True,
+                text=full_text,
+                files=[],  # 此工具不产生文件输出
+            )
+
+        except ImportError as e:
+            return ToolResult(
+                success=False,
+                error=f"依赖缺失: {e}\n请确保 feishu-bot 的相关依赖已安装。"
+            )
+        except Exception as e:
+            return ToolResult(
+                success=False,
+                error=f"Excel解析失败: {e}"
+            )
