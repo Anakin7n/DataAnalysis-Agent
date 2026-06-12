@@ -69,14 +69,14 @@ def test_extract():
     print("3. 参数提取测试")
     print("=" * 50)
 
-    # ReelClean 参数
+    # ReelClean 参数 — 标准输入
     text = "D8是4.4，后台消耗32.8%，总成本300000，上一时段83.4"
-    prompt = safe_format(EXTRACT_REELCLEAN_PROMPT, user_message=text)
+    prompt = safe_format(EXTRACT_REELCLEAN_PROMPT, user_message=text, today="2026-06-12", context="{}")
     try:
         raw = chat("返回纯 JSON。", prompt)
         result = json.loads(raw)
         params = result.get("params", {})
-        print(f"[OK] ReelClean: {json.dumps(params, ensure_ascii=False)}")
+        print(f"[OK] ReelClean 标准: {json.dumps(params, ensure_ascii=False)}")
         assert params.get("total_cost") == 300000, f"total_cost 应为 300000 实际 {params.get('total_cost')}"
         assert params.get("backend_consume") == 32.8
         assert params.get("prev_actual") == 83.4
@@ -85,9 +85,21 @@ def test_extract():
     except Exception as e:
         print(f"[FAIL] ReelClean 提取失败: {e}")
 
+    # ReelClean 参数 — 用户报错的输入格式
+    text = "成本30万 后台45.4% 上一76.6% 新增 5.6%"
+    prompt = safe_format(EXTRACT_REELCLEAN_PROMPT, user_message=text, today="2026-06-12", context="{}")
+    try:
+        raw = chat("返回纯 JSON。", prompt)
+        result = json.loads(raw)
+        params = result.get("params", {})
+        missing = result.get("missing", [])
+        print(f"[OK] ReelClean 简短格式: params={json.dumps(params, ensure_ascii=False)}, missing={missing}")
+    except Exception as e:
+        print(f"[FAIL] ReelClean 简短格式提取失败: {e}")
+
     # Prediction 参数
     text = "预测6月15号排片，封神2:17.6%，哪吒=8.2%，大盘42万场"
-    prompt = safe_format(EXTRACT_PREDICTION_PROMPT, user_message=text, today="2026-06-10")
+    prompt = safe_format(EXTRACT_PREDICTION_PROMPT, user_message=text, today="2026-06-10", context="{}")
     try:
         raw = chat("返回纯 JSON。", prompt)
         result = json.loads(raw)

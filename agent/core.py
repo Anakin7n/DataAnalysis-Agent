@@ -4,16 +4,17 @@ Agent 主循环 — 意图识别 → 参数提取 → 追问/执行 → 回复�
 设计原则（Karpathy 风格）：
 - Session 是普通 dict，不搞状态机枚举
 - 每个请求最多 2 次 LLM 调用（意图 + 提取参数）
-- 工具执行在独立线程中，发完即返回
+- 工具执行在独立子进程中，超时可 terminate
 """
 import json
-import re
-import time
-import threading
 import logging
+import multiprocessing
+import re
+import threading
+import time
 from datetime import date as dt_date
 
-from agent.llm_client import chat
+from agent.llm_client import chat, chat_json
 from agent.prompts import (
     INTENT_PROMPT,
     EXTRACT_REELCLEAN_PROMPT,
@@ -35,6 +36,16 @@ TOOLS = {
     "prediction": PredictionTool(),
     "feishu_excel": FeishuExcelTool(),
 }
+
+
+def _run_tool(intent: str, params: dict, result_queue: multiprocessing.Queue):
+    """在子进程中执行工具。模块级函数——Windows multiprocessing (spawn) 要求。"""
+    try:
+        tool = TOOLS[intent]
+        result = tool.execute(params)
+        result_queue.put(("ok", result))
+    except Exception as e:
+        result_queue.put(("error", str(e)))
 
 EXTRACT_PROMPTS = {
     "reelclean": EXTRACT_REELCLEAN_PROMPT,
@@ -88,6 +99,10 @@ class DataAnalysisAgent:
             if session.intent is not None:
                 session.params["files"] = session.files
                 tool = TOOLS[session.intent]
+                try:
+                    session.params = tool.resolve_params(session.params)
+                except Exception:
+                    pass
                 tool_name = tool.description.split("——")[0]
                 missing = tool.validate_params(session.params)
                 if missing:
@@ -124,8 +139,7 @@ class DataAnalysisAgent:
         """LLM 判断用户想用什么工具。"""
         try:
             prompt = safe_format(INTENT_PROMPT, user_message=text)
-            raw = chat("返回纯 JSON，不要 markdown 包裹。", prompt)
-            result = json.loads(raw)
+            result = chat_json("返回纯 JSON，不要 markdown 包裹。", prompt)
         except Exception as e:
             log.warning(f"意图识别失败: {e}，退化为 unknown")
             result = {"intent": "unknown", "confidence": 0}
@@ -183,6 +197,11 @@ class DataAnalysisAgent:
 
         # 确认意图 — 只提示真正缺失的参数
         tool = TOOLS[intent]
+        # 预处理已有参数（如影片简称→全名），确认消息与后续 LLM 上下文都用解析后的值
+        try:
+            session.params = tool.resolve_params(session.params)
+        except Exception:
+            pass
         # 用 session 当前状态（含已累积的文件）计算真正缺失的参数
         temp_params = dict(session.params)
         if session.files:
@@ -200,7 +219,7 @@ class DataAnalysisAgent:
                 "files": [],
                 "done": False,
             }
-        # 参数已齐全 → 先发确认，再后台执行
+        # 参数已齐全 → 确认 → 后台执行（resolve_params 已在上面调用过，幂等）
         received = self._format_received(session)
         confirm = f"✅ 已识别为【{tool.description.split('——')[0]}】"
         if received:
@@ -218,11 +237,12 @@ class DataAnalysisAgent:
             return
         try:
             today = dt_date.today().strftime("%Y-%m-%d")
-            prompt = safe_format(prompt_template, user_message=text, today=today)
-            raw = chat("返回纯 JSON，不要 markdown 包裹。", prompt)
-            extract = json.loads(raw)
-        except Exception:
-            return  # LLM 提取失败，静默跳过
+            context = json.dumps(session.params, ensure_ascii=False, default=str)
+            prompt = safe_format(prompt_template, user_message=text, today=today, context=context)
+            extract = chat_json("返回纯 JSON，不要 markdown 包裹。", prompt)
+        except Exception as e:
+            log.warning(f"首轮参数提取失败 ({session.intent}): {e}")
+            return  # LLM 提取失败，静默跳过（不打断意图确认流程）
 
         params = extract.get("params", {})
         for key, value in params.items():
@@ -266,9 +286,9 @@ class DataAnalysisAgent:
         try:
             # 注入当天日期用于解析相对日期
             today = dt_date.today().strftime("%Y-%m-%d")
-            prompt = safe_format(prompt_template, user_message=text, today=today)
-            raw = chat("返回纯 JSON，不要 markdown 包裹。", prompt)
-            extract = json.loads(raw)
+            context = json.dumps(session.params, ensure_ascii=False, default=str)
+            prompt = safe_format(prompt_template, user_message=text, today=today, context=context)
+            extract = chat_json("返回纯 JSON，不要 markdown 包裹。", prompt)
         except Exception as e:
             log.warning(f"参数提取失败: {e}")
             return {
@@ -316,6 +336,12 @@ class DataAnalysisAgent:
         if session.files:
             session.params["files"] = session.files
 
+        # 预处理已有参数（如影片简称→全名），确认消息与后续 LLM 上下文都用解析后的值
+        try:
+            session.params = tool.resolve_params(session.params)
+        except Exception:
+            pass
+
         # 重新计算缺失
         actual_missing = tool.validate_params(session.params)
 
@@ -333,8 +359,7 @@ class DataAnalysisAgent:
                 "done": False,
             }
 
-        # 参数齐全 → 先发确认，再后台执行
-        tool = TOOLS[session.intent]
+        # 参数齐全 → 确认 → 后台执行（resolve_params 已在上面调用过，幂等）
         tool_name = tool.description.split("——")[0]
         received = self._format_received(session)
         parts = [f"✅ 参数已齐全【{tool_name}】"]
@@ -344,36 +369,37 @@ class DataAnalysisAgent:
         return {"text": "\n".join(parts), "files": [], "done": False, "_deferred": True}
 
     def _execute_tool(self, session: AgentSession) -> dict:
-        """调用工具，格式化结果。"""
-        tool = TOOLS[session.intent]
+        """在子进程中执行工具，超时则 terminate。"""
+        q = multiprocessing.Queue()
+        p = multiprocessing.Process(
+            target=_run_tool,
+            args=(session.intent, session.params, q),
+            daemon=True,
+        )
+        p.start()
+        p.join(timeout=60)
 
-        # 在后台线程执行（有些工具耗时较长，如猫眼爬虫）
-        result_holder = {"result": None}
-        error_holder = {"error": None}
-
-        def run():
-            try:
-                result_holder["result"] = tool.execute(session.params)
-            except Exception as e:
-                error_holder["error"] = str(e)
-
-        t = threading.Thread(target=run, daemon=True)
-        t.start()
-        t.join(timeout=60)  # 最多等 60 秒
-
-        if error_holder["error"]:
-            self._clear_session(session.user_id)
-            return {"text": f"❌ {error_holder['error']}", "files": [], "done": True}
-
-        if result_holder["result"] is None:
+        if p.is_alive():
+            # 超时 → 真正杀掉子进程（含 Playwright 浏览器等子资源）
+            p.terminate()
+            p.join(timeout=5)
+            if p.is_alive():
+                p.kill()  # terminate 没杀掉则强制 kill
             self._clear_session(session.user_id)
             return {"text": "⏰ 处理超时，请稍后重试。", "files": [], "done": True}
 
-        result: ToolResult = result_holder["result"]
-
-        # 清理 session
         self._clear_session(session.user_id)
 
+        # 从队列取结果
+        try:
+            status, payload = q.get_nowait()
+        except Exception:
+            return {"text": "❌ 工具执行异常（未返回结果）", "files": [], "done": True}
+
+        if status == "error":
+            return {"text": f"❌ {payload}", "files": [], "done": True}
+
+        result: ToolResult = payload
         if not result.success:
             return {"text": f"❌ {result.error}", "files": [], "done": True}
 

@@ -4,16 +4,10 @@ ReelCleanTool — 地面任务分析（消耗/催场/落位）。
 """
 import os
 import shutil
-import sys
 import tempfile
-from pathlib import Path
 
-# 引入 ReelClean-bot 的核心处理模块
-_REELCLEAN_DIR = Path(r"D:\ReelClean-bot")
-if str(_REELCLEAN_DIR) not in sys.path:
-    sys.path.insert(0, str(_REELCLEAN_DIR))
-
-from tools.base import ToolInterface, ToolResult
+from config import REELCLEAN_DIR
+from tools.base import ToolInterface, ToolResult, bot_import
 
 
 class ReelCleanTool(ToolInterface):
@@ -109,7 +103,8 @@ class ReelCleanTool(ToolInterface):
         return missing
 
     def execute(self, params: dict) -> ToolResult:
-        from auto_clean import process_data
+        auto_clean = bot_import(REELCLEAN_DIR, "auto_clean")
+        process_data = auto_clean.process_data
 
         work_dir = tempfile.mkdtemp(prefix="reelclean_")
         output_dir = tempfile.mkdtemp(prefix="reelclean_out_")

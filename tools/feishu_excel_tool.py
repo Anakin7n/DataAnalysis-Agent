@@ -2,15 +2,8 @@
 FeishuExcelTool — 分时汇报。
 封装 feishu-bot 的核心逻辑：Excel URL → 下载 → 解析 → 生成排片情况汇报文案。
 """
-import sys
-from pathlib import Path
-
-# 引入 feishu-bot 的核心模块
-_FEISHU_BOT_DIR = Path(r"D:\feishu-bot")
-if str(_FEISHU_BOT_DIR) not in sys.path:
-    sys.path.insert(0, str(_FEISHU_BOT_DIR))
-
-from tools.base import ToolInterface, ToolResult
+from config import FEISHU_BOT_DIR
+from tools.base import ToolInterface, ToolResult, bot_import
 
 
 class FeishuExcelTool(ToolInterface):
@@ -46,7 +39,8 @@ class FeishuExcelTool(ToolInterface):
         return missing
 
     def execute(self, params: dict) -> ToolResult:
-        from main import process_urls
+        feishu_main = bot_import(FEISHU_BOT_DIR, "main")
+        process_urls = feishu_main.process_urls
 
         try:
             urls = params["urls"]

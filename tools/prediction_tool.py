@@ -2,17 +2,10 @@
 PredictionTool — 排片占比预测。
 封装 Prediction-Bot 的核心逻辑：猫眼排片数据获取 + Excel 生成。
 """
-import sys
 import tempfile
-from io import BytesIO
-from pathlib import Path
 
-# 引入 Prediction-Bot 的核心模块
-_PREDICTION_DIR = Path(r"D:\Prediction-Bot")
-if str(_PREDICTION_DIR) not in sys.path:
-    sys.path.insert(0, str(_PREDICTION_DIR))
-
-from tools.base import ToolInterface, ToolResult
+from config import PREDICTION_DIR
+from tools.base import ToolInterface, ToolResult, bot_import
 
 
 class PredictionTool(ToolInterface):
@@ -97,10 +90,34 @@ class PredictionTool(ToolInterface):
             missing.append("dapan_total")
         return missing
 
+    def resolve_params(self, params: dict) -> dict:
+        """将用户输入的影片简称解析为猫眼完整片名，确认时即可校验。"""
+        movies = params.get("movies", [])
+        if not movies:
+            return params
+        date_str = params.get("date", "")
+
+        try:
+            maoyan_mod = bot_import(PREDICTION_DIR, "scraper.maoyan")
+            mc = maoyan_mod.MaoyanClient()
+            user_names = [m["name"] for m in movies]
+            resolved = self._resolve_movie_names(mc, user_names, date_str)
+            for i, full_name in enumerate(resolved):
+                if i < len(movies):
+                    movies[i]["name"] = full_name
+        except Exception:
+            pass  # 解析失败不阻塞，execute 时会再试
+
+        return params
+
     def execute(self, params: dict) -> ToolResult:
-        from scraper.maoyan import MaoyanClient
-        from excel.generator import generate_excel
-        from bot.cards import summary as format_summary, result as format_result
+        maoyan_mod = bot_import(PREDICTION_DIR, "scraper.maoyan")
+        generator_mod = bot_import(PREDICTION_DIR, "excel.generator")
+        cards_mod = bot_import(PREDICTION_DIR, "bot.cards")
+        MaoyanClient = maoyan_mod.MaoyanClient
+        generate_excel = generator_mod.generate_excel
+        format_summary = cards_mod.summary
+        format_result = cards_mod.result
 
         try:
             date_str = params["date"]           # "6.15"
@@ -109,7 +126,8 @@ class PredictionTool(ToolInterface):
 
             mc = MaoyanClient()
 
-            # LLM 模糊匹配：将用户简称映射为猫眼完整片名
+            # resolve_params 已做过名称解析，这里再调一次是幂等的
+            # （_resolve_movie_names 精确匹配时直接返回）
             user_names = [m["name"] for m in movies]
             resolved = self._resolve_movie_names(mc, user_names, date_str)
 
