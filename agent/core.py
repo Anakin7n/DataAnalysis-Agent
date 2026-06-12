@@ -62,6 +62,7 @@ class AgentSession:
         self.params: dict = {}
         self.files: list = []  # [(filename, bytes), ...]
         self.last_active: float = time.time()
+        self._gen: int = 0  # 消息版本号：并发消息只保留最新
 
     def is_expired(self) -> bool:
         return time.time() - self.last_active > SESSION_TIMEOUT
@@ -89,10 +90,18 @@ class DataAnalysisAgent:
         done=False 表示追问，等待用户补充。
         """
         session = self._get_or_create_session(user_id)
+        session._gen += 1
+        my_gen = session._gen
         if files:
             session.files.extend(files)
         session.touch()
         self._cleanup_expired()
+
+        def _ok(resp: dict) -> dict:
+            """如果处理期间有新消息到达，当前结果已过时，静默丢弃。"""
+            if session._gen != my_gen:
+                return {"text": "", "files": [], "done": False}
+            return resp
 
         # 纯文件消息（无文本）— 静默累积，不调 LLM，但需给用户反馈
         if not text and files:
@@ -112,26 +121,26 @@ class DataAnalysisAgent:
                     if received:
                         parts.append(f"\n📎 已收到：\n{received}")
                     parts.append(f"\n📋 仍需提供：\n{hints}")
-                    return {"text": "\n".join(parts), "files": [], "done": False}
+                    return _ok({"text": "\n".join(parts), "files": [], "done": False})
                 else:
                     received = self._format_received(session)
                     parts = [f"✅ 收到文件，参数已齐全【{tool_name}】"]
                     if received:
                         parts.append(f"\n📎 已收到：\n{received}")
                     parts.append("\n⏳ 正在处理...")
-                    return {"text": "\n".join(parts), "files": [], "done": False, "_deferred": True}
-            return {"text": "", "files": [], "done": False}
+                    return _ok({"text": "\n".join(parts), "files": [], "done": False, "_deferred": True})
+            return _ok({"text": "", "files": [], "done": False})
 
         # Step 1: 意图识别
         if session.intent is None:
-            return self._classify_intent(session, text)
+            return _ok(self._classify_intent(session, text))
 
         # Step 2: 参数提取
         if self._has_missing_params(session):
-            return self._extract_params(session, text)
+            return _ok(self._extract_params(session, text))
 
         # Step 3: 参数齐全 → 执行
-        return self._execute_tool(session)
+        return _ok(self._execute_tool(session))
 
     # ── 内部步骤 ──
 
@@ -237,7 +246,9 @@ class DataAnalysisAgent:
             return
         try:
             today = dt_date.today().strftime("%Y-%m-%d")
-            context = json.dumps(session.params, ensure_ascii=False, default=str)
+            # 构建 LLM 上下文时排除 files（含原始字节，不能进 prompt）
+            ctx_params = {k: v for k, v in session.params.items() if k != "files"}
+            context = json.dumps(ctx_params, ensure_ascii=False, default=str)
             prompt = safe_format(prompt_template, user_message=text, today=today, context=context)
             extract = chat_json("返回纯 JSON，不要 markdown 包裹。", prompt)
         except Exception as e:
@@ -250,8 +261,6 @@ class DataAnalysisAgent:
                 continue  # files 来自实际文件上传，不用 LLM 的布尔值
             if value is None:
                 continue
-            if isinstance(value, (int, float)) and value == 0:
-                continue  # LLM 有时返回 0 代替 null，跳过
             if key not in session.params:
                 session.params[key] = value
             elif key == "movies" and isinstance(value, list):
@@ -286,7 +295,9 @@ class DataAnalysisAgent:
         try:
             # 注入当天日期用于解析相对日期
             today = dt_date.today().strftime("%Y-%m-%d")
-            context = json.dumps(session.params, ensure_ascii=False, default=str)
+            # 构建 LLM 上下文时排除 files（含原始字节，不能进 prompt）
+            ctx_params = {k: v for k, v in session.params.items() if k != "files"}
+            context = json.dumps(ctx_params, ensure_ascii=False, default=str)
             prompt = safe_format(prompt_template, user_message=text, today=today, context=context)
             extract = chat_json("返回纯 JSON，不要 markdown 包裹。", prompt)
         except Exception as e:
