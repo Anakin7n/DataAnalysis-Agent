@@ -116,7 +116,7 @@ class DataAnalysisAgent:
                 missing = tool.validate_params(session.params)
                 if missing:
                     received = self._format_received(session)
-                    hints = self._missing_params_hint(session.intent, missing)
+                    hints = self._missing_params_hint(session.intent, missing, session)
                     parts = [f"📎 已收到文件【{tool_name}】"]
                     if received:
                         parts.append(f"\n📎 已收到：\n{received}")
@@ -131,6 +131,20 @@ class DataAnalysisAgent:
                     return _ok({"text": "\n".join(parts), "files": [], "done": False, "_deferred": True})
             return _ok({"text": "", "files": [], "done": False})
 
+        # 意图切换检测：当前已有意图时，判断用户是否想换工具
+        if session.intent is not None:
+            new_intent, confidence = self._detect_intent(text)
+            if confidence >= 0.7 and new_intent not in (session.intent, "unknown", "multi_step"):
+                old_name = TOOLS[session.intent].description.split("——")[0]
+                new_name = TOOLS[new_intent].description.split("——")[0]
+                log.info(f"[意图切换] {old_name} → {new_name}")
+                # 重置 session 状态
+                session.intent = None
+                session.params = {}
+                session.files = []
+                # 重新分类
+                return _ok(self._classify_intent(session, text))
+
         # Step 1: 意图识别
         if session.intent is None:
             return _ok(self._classify_intent(session, text))
@@ -142,24 +156,29 @@ class DataAnalysisAgent:
         # Step 3: 参数齐全 → 执行
         return _ok(self._execute_tool(session))
 
-    # ── 内部步骤 ──
+    # ── 意图检测（纯 LLM，不修改 session）──
 
-    def _classify_intent(self, session: AgentSession, text: str) -> dict:
-        """LLM 判断用户想用什么工具。"""
+    def _detect_intent(self, text: str) -> tuple[str, float]:
+        """LLM 判断用户想用什么工具。返回 (intent, confidence)。"""
         try:
             prompt = safe_format(INTENT_PROMPT, user_message=text)
             result = chat_json("返回纯 JSON，不要 markdown 包裹。", prompt)
-        except Exception as e:
-            log.warning(f"意图识别失败: {e}，退化为 unknown")
-            result = {"intent": "unknown", "confidence": 0}
+        except Exception:
+            log.warning(f"意图检测失败，退化为 unknown")
+            return "unknown", 0
 
         intent = result.get("intent", "unknown")
         confidence = result.get("confidence", 0)
-
-        # 不认识的意图
         if intent not in TOOLS and intent != "multi_step":
             intent = "unknown"
             confidence = 0
+        return intent, confidence
+
+    # ── 内部步骤 ──
+
+    def _classify_intent(self, session: AgentSession, text: str) -> dict:
+        """意图识别 + 确认：检测意图、设置 session、检查参数、生成确认消息。"""
+        intent, confidence = self._detect_intent(text)
 
         # 置信度低 → 追问
         if confidence < 0.7 or intent == "unknown":
@@ -169,7 +188,7 @@ class DataAnalysisAgent:
                     "我能帮你做这些事：\n"
                     "1️⃣ 地面任务分析 — 发送3个Excel + 参数（总成本/后台消耗/上一时段/今日新增占比）→ 消耗报告/催场情况/落位预估\n"
                     "2️⃣ 排片占比预测 — 告诉我日期、影片占比和大盘场次 → 预测各影片（含竞品）排片占比\n"
-                    "3️⃣ 分时汇报 — 发送Excel文件链接 → 生成目标影片未来两天排片情况汇报"
+                    "3️⃣ 分时汇报 — 发送Excel链接或直接发.xlsx文件 → 生成排片情况汇报"
                 ),
                 "files": [],
                 "done": False,
@@ -218,7 +237,7 @@ class DataAnalysisAgent:
         missing = tool.validate_params(temp_params)
         if missing:
             received = self._format_received(session)
-            hints = self._missing_params_hint(intent, missing)
+            hints = self._missing_params_hint(intent, missing, session)
             parts = [f"✅ 已识别为【{tool.description.split('——')[0]}】"]
             if received:
                 parts.append(f"\n📎 已收到：\n{received}")
@@ -359,7 +378,7 @@ class DataAnalysisAgent:
         if actual_missing:
             tool_name = tool.description.split("——")[0]
             received = self._format_received(session)
-            hints = self._missing_params_hint(session.intent, actual_missing)
+            hints = self._missing_params_hint(session.intent, actual_missing, session)
             parts = [f"📋 【{tool_name}】"]
             if received:
                 parts.append(f"\n📎 已收到：\n{received}")
@@ -459,7 +478,7 @@ class DataAnalysisAgent:
             for uid in expired:
                 del self._sessions[uid]
 
-    def _missing_params_hint(self, intent: str, missing: list[str]) -> str:
+    def _missing_params_hint(self, intent: str, missing: list[str], session: AgentSession | None = None) -> str:
         """为缺失参数生成友好的提示。"""
         hints = {
             "total_cost": "• 总成本 — 如 300000 或 30万",
@@ -477,6 +496,18 @@ class DataAnalysisAgent:
             "dapan_total": "• 大盘场次 — 如 42万 或 420000",
             "urls": "• Excel文件链接 — 请发送2个文件链接",
         }
+        if intent == "feishu_excel":
+            if "files" in missing:
+                existing = len(session.files) if session else 0
+                remain = max(0, 2 - existing)
+                if remain == 0:
+                    hints["files"] = "• Excel文件"
+                elif remain == 2:
+                    hints["files"] = "• Excel文件 — 请发送2个 .xlsx 文件"
+                else:
+                    hints["files"] = f"• Excel文件 — 还需 {remain} 个"
+            if "urls" in missing:
+                hints["urls"] = "• Excel文件 — 发送2个文件链接，或直接发送2个 .xlsx 文件"
         return "\n".join(hints.get(m, f"• {m}") for m in missing)
 
     def _format_received(self, session: AgentSession) -> str:
@@ -521,11 +552,18 @@ class DataAnalysisAgent:
 
         elif intent == "feishu_excel":
             urls = session.params.get("urls", [])
+            files = session.files
             if urls:
                 if len(urls) == 1:
                     lines.append(f"• 链接：1 个（还需 1 个）")
                 else:
                     lines.append(f"• 链接：{len(urls)} 个")
+            elif files:
+                fnames = [f[0] for f in files]
+                if len(files) == 1:
+                    lines.append(f"• 文件：{fnames[0]}（还需 1 个）")
+                else:
+                    lines.append(f"• 文件：{'、'.join(fnames)}")
 
         return "\n".join(lines) if lines else ""
 

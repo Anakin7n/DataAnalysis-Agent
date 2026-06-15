@@ -1,6 +1,8 @@
 """
 FeishuExcelTool — 分时汇报。
-封装 feishu-bot 的核心逻辑：Excel URL → 下载 → 解析 → 生成排片情况汇报文案。
+封装 feishu-bot 的核心逻辑：
+  - URL 模式：Excel 链接 → 下载 → 解析 → 生成排片情况汇报文案
+  - 文件模式：群聊直接发送 .xlsx 附件 → 解析 → 两文件配对合并 → 生成文案
 """
 from config import FEISHU_BOT_DIR
 from tools.base import ToolInterface, ToolResult, bot_import
@@ -29,23 +31,70 @@ class FeishuExcelTool(ToolInterface):
                 "required": True,
                 "aliases": ["链接", "URL", "文件", "地址"],
             },
+            "files": {
+                "label": "Excel文件",
+                "type": "list",
+                "required": False,
+                "aliases": ["附件", "文件"],
+            },
         }
 
     def validate_params(self, params: dict) -> list[str]:
-        missing = []
+        files = params.get("files", [])
         urls = params.get("urls", [])
+
+        # 文件模式：2 个本地文件即够
+        if files:
+            if len(files) < 2:
+                return ["files"]
+            return []
+
+        # URL 模式：至少 2 个链接
         if len(urls) < 2:
-            missing.append("urls")
-        return missing
+            return ["urls"]
+        return []
 
     def execute(self, params: dict) -> ToolResult:
         feishu_main = bot_import(FEISHU_BOT_DIR, "main")
         process_urls = feishu_main.process_urls
+        _parse_single_file = feishu_main._parse_single_file
+        build_message = feishu_main.build_message
+
+        files = params.get("files", [])
+        urls = params.get("urls", [])
 
         try:
-            urls = params["urls"]
+            if files:
+                # ── 文件模式：本地解析每个 Excel → 配对合并 ──
+                entries = []
+                for fname, content in files:
+                    entry = _parse_single_file(fname, content)
+                    if entry:
+                        entries.append(entry)
 
-            # 调用 feishu-bot 核心处理逻辑
+                if len(entries) < 2:
+                    return ToolResult(
+                        success=False,
+                        error=(
+                            f"至少需要 2 个有效文件，当前只有 {len(entries)} 个。\n"
+                            "请确认：\n"
+                            "1. 文件名格式正确（如：影片名(2024-06-10+08:00-...)）\n"
+                            "2. Excel中包含「综拓开场数据基础模板2」或类似Sheet\n"
+                            "3. Sheet中包含「场次数」「劣势影城数」「排片占比」等列"
+                        ),
+                    )
+
+                entries.sort(key=lambda e: e["mon_start"])
+                main_msg, summary_msg = build_message(entries)
+
+                return ToolResult(
+                    success=True,
+                    text=main_msg,
+                    extra_text=summary_msg,
+                    files=[],
+                )
+
+            # ── URL 模式：feishu-bot 下载 + 解析 ──
             result = process_urls(urls)
 
             if result is None:

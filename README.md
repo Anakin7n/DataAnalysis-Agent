@@ -19,7 +19,7 @@ Agent 本身不做数据处理——它充当路由和参数提取层，实际�
 |------|------|------|
 | **地面任务分析** (ReelClean) | 3 个 Excel + 4 个参数（总成本/后台消耗/上一时段/今日新增占比） | 消耗报告 + 催场情况 + 落位预估（3 段文案）+ 2 个处理后 Excel |
 | **排片占比预测** (Prediction) | 日期 + 影片及新增占比 + 大盘场次 | 预测结果总结 + 各影片（含竞品）落位占比文案 + 1 个预测 Excel |
-| **分时汇报** (Feishu Excel) | 2 个 Excel 文件链接 | 目标影片未来两天排片情况汇报文案 + 跟进语 |
+| **分时汇报** (Feishu Excel) | 2 个 Excel 文件链接 或 直接发送 .xlsx 文件 | 目标影片未来两天排片情况汇报文案 + 跟进语（两文件配对合并） |
 
 ## 对话流程
 
@@ -28,14 +28,16 @@ Agent 使用多轮会话状态机，每轮最多 2 次 LLM 调用：
 ```
 用户消息
   │
+  ├─ 意图已定 → LLM 检测是否意图切换 (高置信度不同工具 → 自动重置切换)
+  │
   ├─ 意图未定 → LLM 分类 (confidence < 0.7 追问，unknown 提示能力范围)
   │
   ├─ 意图已定、参数不全 → LLM 提取参数 → 缺失则追问、齐全则执行
   │
-  └─ 参数齐全 → 确认消息先发出 → 后台线程执行工具 (60s 超时) → 结果单独推送
+  └─ 参数齐全 → 确认消息先发出 → 后台执行工具 (60s 超时) → 结果单独推送
 ```
 
-用户可以在多轮对话中逐步补充参数，Bot 会记住上下文。Session 超时（默认 10 分钟）后自动清理。
+用户可以随时切换工具，Agent 会智能识别新意图并自动重置上下文。多轮对话中逐步补充参数会被记住，Session 超时（默认 10 分钟）后自动清理。
 
 ## 架构
 
@@ -174,7 +176,7 @@ DataAnalysis-Agent/
 |-----|------|---------|
 | ReelClean | `D:\ReelClean-bot` | `auto_clean.process_data()` |
 | Prediction | `D:\Prediction-Bot` | `scraper.maoyan.MaoyanClient` / `excel.generator.generate_excel()` |
-| Feishu | `D:\feishu-bot` | `main.process_urls()` / `main.build_message()` |
+| Feishu | `D:\feishu-bot` | `main.process_urls()` / `main._parse_single_file()` / `main.build_message()` |
 
 ## 离线验证
 
