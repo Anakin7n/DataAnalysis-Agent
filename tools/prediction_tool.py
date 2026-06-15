@@ -1,11 +1,13 @@
 """
 PredictionTool — 排片占比预测。
-封装 Prediction-Bot 的核心逻辑：猫眼排片数据获取 + Excel 生成。
+内嵌 Prediction 核心逻辑：猫眼排片数据获取 + Excel 生成。
 """
 import tempfile
 
-from config import PREDICTION_DIR
-from tools.base import ToolInterface, ToolResult, bot_import
+from tools.base import ToolInterface, ToolResult
+from tools.prediction.maoyan import MaoyanClient
+from tools.prediction.generator import generate_excel
+from tools.prediction.cards import summary as format_summary, result as format_result
 
 
 class PredictionTool(ToolInterface):
@@ -98,8 +100,7 @@ class PredictionTool(ToolInterface):
         date_str = params.get("date", "")
 
         try:
-            maoyan_mod = bot_import(PREDICTION_DIR, "scraper.maoyan")
-            mc = maoyan_mod.MaoyanClient()
+            mc = MaoyanClient()
             user_names = [m["name"] for m in movies]
             resolved = self._resolve_movie_names(mc, user_names, date_str)
             for i, full_name in enumerate(resolved):
@@ -111,13 +112,6 @@ class PredictionTool(ToolInterface):
         return params
 
     def execute(self, params: dict) -> ToolResult:
-        maoyan_mod = bot_import(PREDICTION_DIR, "scraper.maoyan")
-        generator_mod = bot_import(PREDICTION_DIR, "excel.generator")
-        cards_mod = bot_import(PREDICTION_DIR, "bot.cards")
-        MaoyanClient = maoyan_mod.MaoyanClient
-        generate_excel = generator_mod.generate_excel
-        format_summary = cards_mod.summary
-        format_result = cards_mod.result
 
         try:
             date_str = params["date"]           # "6.15"
@@ -183,7 +177,7 @@ class PredictionTool(ToolInterface):
         except ImportError as e:
             return ToolResult(
                 success=False,
-                error=f"依赖缺失: {e}\n请确保 Prediction-Bot 已安装 playwright 等依赖。"
+                error=f"依赖缺失: {e}\n请确保已安装 playwright 等依赖（pip install playwright && playwright install chromium）。"
             )
         except Exception as e:
             return ToolResult(

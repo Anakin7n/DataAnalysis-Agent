@@ -1,13 +1,13 @@
 """
 ReelCleanTool — 地面任务分析（消耗/催场/落位）。
-封装 ReelClean-bot 的核心逻辑：3个Excel → 分析 → 文案+处理后文件。
+内嵌 ReelClean 核心逻辑：3个Excel → 分析 → 文案+处理后文件。
 """
 import os
 import shutil
 import tempfile
 
-from config import REELCLEAN_DIR
-from tools.base import ToolInterface, ToolResult, bot_import
+from tools.base import ToolInterface, ToolResult
+from tools.reelclean.auto_clean import process_data
 
 
 class ReelCleanTool(ToolInterface):
@@ -103,8 +103,6 @@ class ReelCleanTool(ToolInterface):
         return missing
 
     def execute(self, params: dict) -> ToolResult:
-        auto_clean = bot_import(REELCLEAN_DIR, "auto_clean")
-        process_data = auto_clean.process_data
 
         work_dir = tempfile.mkdtemp(prefix="reelclean_")
         output_dir = tempfile.mkdtemp(prefix="reelclean_out_")

@@ -24,22 +24,7 @@ LLM_TIMEOUT = int(os.getenv("LLM_TIMEOUT", "15"))
 # ── 猫眼 ──
 MAOYAN_DASHBOARD_URL = "https://piaofang.maoyan.com/dashboard-ajax"
 
-# ── 外部 Bot 路径（优先 .env，否则自动识别同级目录）──
 _PROJECT_DIR = Path(__file__).parent
-_PARENT_DIR = _PROJECT_DIR.parent
-
-
-def _resolve_bot_dir(env_key: str, default_name: str) -> Path:
-    """优先读 .env，否则在本项目的同级目录中查找。"""
-    env_val = os.getenv(env_key)
-    if env_val:
-        return Path(env_val)
-    return _PARENT_DIR / default_name
-
-
-REELCLEAN_DIR = _resolve_bot_dir("REELCLEAN_DIR", "ReelClean-bot")
-PREDICTION_DIR = _resolve_bot_dir("PREDICTION_DIR", "Prediction-Bot")
-FEISHU_BOT_DIR = _resolve_bot_dir("FEISHU_BOT_DIR", "feishu-bot")
 
 # ── Session ──
 SESSION_TIMEOUT = int(os.getenv("SESSION_TIMEOUT", "600"))  # 10 分钟
