@@ -60,7 +60,86 @@ tools/                        ← 三个工具的封装
     └── feishu_excel_tool.py  → D:\feishu-bot\main.py
 ```
 
-> **路径依赖**：三个 Bot 的路径硬编码为 `D:\ReelClean-bot`、`D:\Prediction-Bot`、`D:\feishu-bot`。部署到其他机器时需要确保这三个仓库位于 `D:\` 根目录，或修改各 `tools/*_tool.py` 中的 `_*_DIR` 常量。
+> **路径依赖**：Agent 自动在父目录中查找三个 Bot（如 `D:\ReelClean-bot`）。如需自定义路径，在 `.env` 中设置 `REELCLEAN_DIR` / `PREDICTION_DIR` / `FEISHU_BOT_DIR`。
+
+## 快速部署
+
+### 一键安装（推荐）
+
+项目根目录提供了 `install_all.bat`，自动完成所有安装步骤。**前提：已安装 Python 3.12+ 并勾选 "Add Python to PATH"**。
+
+#### 1. 克隆四个仓库到同一父目录
+
+四个项目必须在**同一父目录**下（如 `D:\`）：
+
+```
+D:\
+├── DataAnalysis-Agent\    ← 本项目（LLM Agent）
+├── ReelClean-bot\         ← 地面任务分析
+├── Prediction-Bot\        ← 排片占比预测
+└── feishu-bot\            ← 分时汇报
+```
+
+```powershell
+cd D:\
+git clone <DataAnalysis-Agent 仓库地址>
+git clone <ReelClean-bot 仓库地址>
+git clone <Prediction-Bot 仓库地址>
+git clone <feishu-bot 仓库地址>
+```
+
+#### 2. 运行一键安装
+
+```powershell
+cd D:\DataAnalysis-Agent
+.\install_all.bat
+```
+
+安装程序会自动完成：
+
+| 步骤 | 内容 |
+|------|------|
+| 检查 Python | 验证 3.12+ 版本 |
+| ReelClean-bot | 创建 venv → 安装依赖（openpyxl/requests/pandas/xlwings/lark-oapi 等） |
+| Prediction-Bot | 创建 venv → 安装依赖（openpyxl/requests/playwright 等） |
+| feishu-bot | 创建 venv → 安装依赖（openpyxl/requests/websockets 等） |
+| DataAnalysis-Agent | 创建 venv → 安装依赖（openai/playwright/numpy 等全部 4 个项目所需） |
+| Playwright 浏览器 | 安装 Chromium（~180MB，排片预测爬虫依赖） |
+| 配置 .env | 生成模板，提示填入飞书 + DeepSeek 凭证 |
+
+#### 3. 配置凭证
+
+安装完成后，打开 `.env` 填入三个关键凭证：
+
+```bash
+FEISHU_APP_ID=cli_xxxxxxxxxxxx        # 飞书应用 App ID
+FEISHU_APP_SECRET=xxxxxxxxxxxxxxxx    # 飞书应用 App Secret
+DEEPSEEK_API_KEY=sk-xxxxxxxxxxxx      # DeepSeek API Key
+```
+
+#### 4. 启动
+
+双击 `start.vbs`（推荐，零闪屏），或运行：
+
+```powershell
+.venv\Scripts\python main.py
+```
+
+#### 5. 三个 Bot 已同步安装，可独立运行
+
+`install_all.bat` 为每个 Bot 创建了独立的虚拟环境并安装了各自的依赖。启动方式：
+
+| Bot | 启动方式 | 说明 |
+|-----|---------|------|
+| ReelClean-bot | 双击 `D:\ReelClean-bot\start.vbs` | 地面任务分析独立服务 |
+| Prediction-Bot | 双击 `D:\Prediction-Bot\start.vbs` | 排片预测独立服务 |
+| feishu-bot | 双击 `D:\feishu-bot\start.vbs` | 分时汇报独立服务 |
+
+> ⚠️ **注意**：每个 Bot 独立运行时需要各自的 `.env` 文件中配置 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`（与 Agent 的凭证相同）。安装脚本已自动创建 `.env` 模板，用记事本打开填入凭证即可。
+
+### 手动安装
+
+如果不使用一键安装脚本，可按以下步骤手动设置：
 
 ## 环境准备
 

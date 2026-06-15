@@ -12,6 +12,7 @@ pandas>=2.2
 openpyxl>=3.1
 xlwings>=0.33
 numpy>=2.0
+lark-oapi>=1.0
 
 # 浏览器自动化 (Prediction 猫眼爬虫)
 playwright>=1.48
