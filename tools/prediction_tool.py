@@ -49,16 +49,19 @@ class PredictionTool(ToolInterface):
     @staticmethod
     def _resolve_movie_names(mc, user_names: list[str], date_str: str) -> list[str]:
         """用 LLM 将用户输入的简称匹配为猫眼完整影片名。
-        优先匹配预测日期当天会上映的版本（如同系列多部的选择）。
+
+        使用目标日期的侧边栏完整影片列表做候选（含未上映电影），
+        而非仅今天的 fetch_movies() 列表。
         """
         import json as _json
         from agent.llm_client import chat
 
-        all_movies = mc.fetch_movies()
-        all_names = [m["name"] for m in all_movies if m["name"]]
+        # 用目标日期的侧边栏完整列表做候选（含未上映电影）
+        all_names = mc.fetch_movies_for_date(date_str)
+        name_set = set(all_names)
 
-        # 已有精确匹配的跳过 LLM
-        if all(n in all_names for n in user_names):
+        # 全部精确匹配 → 跳过 LLM
+        if all(n in name_set for n in user_names):
             return user_names
 
         prompt = (

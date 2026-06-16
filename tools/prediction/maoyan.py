@@ -51,6 +51,64 @@ class MaoyanClient:
         desc = data.get("movieList", {}).get("data", {}).get("nationBoxInfo", {}).get("showCountDesc", "")
         return _parse_show_count_desc(desc)
 
+    def fetch_movies_for_date(self, date_str: str) -> list[str]:
+        """获取目标日期的侧边栏完整影片名列表（含未上映电影）。
+
+        用于 _resolve_movie_names 的候选列表，解决未上映电影不在
+        fetch_movies() 返回的今日大盘列表中的问题。
+        """
+        from playwright.sync_api import sync_playwright
+
+        today_movies = self.fetch_movies()
+        first_id = today_movies[0]["movie_id"] if today_movies else 0
+        if not first_id:
+            return [m["name"] for m in today_movies]
+
+        api_date_no_dash = _to_api_date(date_str).replace("-", "")
+        first_url = f"https://piaofang.maoyan.com/i/dashboard/movie?movieId={first_id}&date={api_date_no_dash}"
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page(viewport={"width": 375, "height": 812})
+            try:
+                page.goto(first_url, wait_until="networkidle", timeout=15000)
+                page.wait_for_timeout(2000)
+                # 多种方式提取侧边栏影片名
+                names = page.evaluate("""() => {
+                    const results = new Set();
+                    // 方式1: a 标签含 movieId 的链接（侧边栏导航链接）
+                    document.querySelectorAll('a[href*="movieId"]').forEach(a => {
+                        const t = a.textContent.trim();
+                        if (t && t.length >= 2 && t.length <= 40) results.add(t);
+                    });
+                    if (results.size >= 3) return [...results];
+                    // 方式2: class 含 movie/film 的元素
+                    document.querySelectorAll('[class*="movie" i], [class*="film" i]').forEach(el => {
+                        const t = el.textContent.trim();
+                        if (t && t.length >= 2 && t.length <= 40) results.add(t);
+                    });
+                    if (results.size >= 3) return [...results];
+                    // 方式3: 侧边栏区域（左侧 40%）的叶子文本
+                    document.querySelectorAll('*').forEach(el => {
+                        if (el.children.length === 0) {
+                            const r = el.getBoundingClientRect();
+                            if (r.left < window.innerWidth * 0.4 && r.width > 0) {
+                                const t = el.textContent.trim();
+                                if (t && t.length >= 2 && t.length <= 40) results.add(t);
+                            }
+                        }
+                    });
+                    return [...results];
+                }""")
+                unique = [n for n in names if n and len(n) >= 2 and not n.isdigit()]
+            except Exception:
+                unique = []
+            browser.close()
+
+        # 过滤非影片名的噪音（上映天数、票房数字、类型标签等）
+        movie_names = _filter_movie_names(unique)
+        return movie_names if movie_names else [m["name"] for m in today_movies]
+
     def fetch_by_date(self, user_names: list[str], date_str: str) -> tuple[list[dict], int]:
         from playwright.sync_api import sync_playwright
 
@@ -186,3 +244,33 @@ def _parse_show_count_desc(desc: str) -> int:
     if m:
         return int(float(m.group(1)) * 10000)
     return 0
+
+
+def _filter_movie_names(raw: list[str]) -> list[str]:
+    """过滤侧边栏提取结果中的非影片名噪音。"""
+    # 噪音特征
+    noise = re.compile(
+        r'上映|点映|'
+        r'\d+天|'               # "51天"
+        r'\d+\.?\d*亿|'         # "17.53亿"
+        r'\d+\.?\d*万|'         # "936.9万"
+        r'^\d+[.,\d]*\s*$|'    # 纯数字
+        r'^[\d零一二三四五六七八九十百千万亿]+$|'  # 纯中文数字
+        r'剧情[、,，]|喜剧|动作|爱情|科幻|恐怖|动画|'
+        r'纪录片|短片|惊悚|悬疑|奇幻|冒险|战争|'
+        r'历史|家庭|犯罪|音乐|歌舞|武侠|传记|'
+        r'灾难|西部|运动|黑色电影|'
+        r'^影片\s*[（(]'          # "影片 (点击..."
+    )
+    seen = set()
+    result = []
+    for name in raw:
+        name = name.strip()
+        if not name or len(name) < 2 or len(name) > 30:
+            continue
+        if noise.search(name):
+            continue
+        if name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result

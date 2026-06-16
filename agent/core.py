@@ -54,6 +54,17 @@ EXTRACT_PROMPTS = {
 }
 
 
+def _normalize_prediction_input(text: str) -> str:
+    """预处理预测类用户输入：统一分隔符、去除书名号等噪音。"""
+    # 书名号包裹的片名：剥掉《》
+    text = re.sub(r'[《》〈〉]', '', text)
+    # 中文句号当分隔符：。→,
+    text = text.replace('。', ',')
+    # 全角冒号：统一为半角冒号
+    text = text.replace('：', ':')
+    return text
+
+
 class AgentSession:
     """单个用户的对话状态。纯数据对象，不包含逻辑。"""
     def __init__(self, user_id: str):
@@ -268,7 +279,9 @@ class DataAnalysisAgent:
             # 构建 LLM 上下文时排除 files（含原始字节，不能进 prompt）
             ctx_params = {k: v for k, v in session.params.items() if k != "files"}
             context = json.dumps(ctx_params, ensure_ascii=False, default=str)
-            prompt = safe_format(prompt_template, user_message=text, today=today, context=context)
+            # prediction 意图：预处理输入（去书名号、统一分隔符）
+            msg = _normalize_prediction_input(text) if session.intent == "prediction" else text
+            prompt = safe_format(prompt_template, user_message=msg, today=today, context=context)
             extract = chat_json("返回纯 JSON，不要 markdown 包裹。", prompt)
         except Exception as e:
             log.warning(f"首轮参数提取失败 ({session.intent}): {e}")
@@ -317,7 +330,9 @@ class DataAnalysisAgent:
             # 构建 LLM 上下文时排除 files（含原始字节，不能进 prompt）
             ctx_params = {k: v for k, v in session.params.items() if k != "files"}
             context = json.dumps(ctx_params, ensure_ascii=False, default=str)
-            prompt = safe_format(prompt_template, user_message=text, today=today, context=context)
+            # prediction 意图：预处理输入（去书名号、统一分隔符）
+            msg = _normalize_prediction_input(text) if session.intent == "prediction" else text
+            prompt = safe_format(prompt_template, user_message=msg, today=today, context=context)
             extract = chat_json("返回纯 JSON，不要 markdown 包裹。", prompt)
         except Exception as e:
             log.warning(f"参数提取失败: {e}")
