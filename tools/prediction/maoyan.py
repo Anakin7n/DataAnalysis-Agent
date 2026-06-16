@@ -2,11 +2,14 @@
 猫眼排片数据客户端。
 原位于 Prediction-Bot/scraper/maoyan.py，已内嵌到 Agent 项目中。
 """
+import logging
 import re
 from datetime import date as dt_date
 
 import requests
 from config import MAOYAN_DASHBOARD_URL
+
+logger = logging.getLogger(__name__)
 
 
 class MaoyanClient:
@@ -61,13 +64,16 @@ class MaoyanClient:
         known = []
         unknown = []
 
+        logger.info("今日大盘共 %d 部电影，用户输入 %d 部", len(all_movies), len(user_names))
         for uname in user_names:
             uname = uname.strip()
             mid = name_to_id.get(uname)
             if mid:
                 known.append((uname, mid))
+                logger.info("  [匹配] \"%s\" -> movieId=%s", uname, mid)
             else:
                 unknown.append(uname)
+                logger.warning("  [未匹配] \"%s\" 不在今日大盘列表中，将尝试侧边栏查找", uname)
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -80,6 +86,7 @@ class MaoyanClient:
                     if total_show_count == 0:
                         total_show_count = page_total
                     results.append({"name": uname, "show_count": sc, "box_rate": "N/A", "movie_id": mid})
+                    logger.info("  [详情页] \"%s\" show_count=%s, total=%s", uname, sc, page_total)
                 page.close()
 
             # Process unknown movies by clicking through the sidebar
@@ -91,40 +98,54 @@ class MaoyanClient:
                 first_id = 0
 
             if unknown and first_id:
+                first_url = f"https://piaofang.maoyan.com/i/dashboard/movie?movieId={first_id}&date={api_date_no_dash}"
                 page = browser.new_page(viewport={"width": 375, "height": 812})
-                page.goto(
-                    f"https://piaofang.maoyan.com/i/dashboard/movie?movieId={first_id}&date={api_date_no_dash}",
-                    wait_until="domcontentloaded", timeout=15000,
-                )
+                page.goto(first_url, wait_until="networkidle", timeout=15000)
                 page.wait_for_timeout(2000)
 
                 for uname in unknown:
                     sc = 0
                     movie_id = 0
+                    logger.info("  [侧边栏] 尝试查找 \"%s\"...", uname)
                     try:
                         el = page.locator(f"text={uname}").first
                         el.click(timeout=5000)
                         page.wait_for_timeout(2000)
+                        logger.info("  [侧边栏] \"%s\" 点击成功，当前URL: %s", uname, page.url)
 
                         url = page.url
                         mid = re.search(r'movieId=(\d+)', url)
                         if mid:
                             movie_id = int(mid.group(1))
+                            logger.info("  [侧边栏] \"%s\" 提取到 movieId=%s", uname, movie_id)
+                        else:
+                            logger.warning("  [侧边栏] \"%s\" URL中未找到movieId: %s", uname, url)
 
                         text = page.inner_text("body")
                         m = re.search(r'当日排片场次\s*\n\s*([\d,]+)', text)
                         if m:
                             sc = int(m.group(1).replace(",", ""))
+                            logger.info("  [侧边栏] \"%s\" 场次=%s", uname, sc)
+                        else:
+                            logger.warning("  [侧边栏] \"%s\" 页面中未匹配到「当日排片场次」", uname)
 
                         if total_show_count == 0:
-                            tm = re.search(r'总场次[：:]\s*([\d.]+)万', text)
+                            tm = re.search(r'总场次[：:]\s*([\d,.]+)\s*(万|场)?', text)
                             if tm:
-                                total_show_count = int(float(tm.group(1)) * 10000)
+                                num = float(tm.group(1).replace(',', ''))
+                                total_show_count = int(num * 10000) if tm.group(2) == '万' else int(num)
 
-                        page.go_back()
-                        page.wait_for_timeout(1000)
-                    except Exception:
-                        pass
+                        # 重新加载侧边栏页面（不能用 go_back，SPA 不会重新渲染）
+                        page.goto(first_url, wait_until="networkidle", timeout=15000)
+                        page.wait_for_timeout(2000)
+                    except Exception as e:
+                        logger.warning("  [侧边栏] \"%s\" 失败: %s", uname, e)
+                        # 失败后也重新加载侧边栏页面
+                        try:
+                            page.goto(first_url, wait_until="networkidle", timeout=15000)
+                            page.wait_for_timeout(2000)
+                        except Exception:
+                            pass
 
                     results.append({"name": uname, "show_count": sc, "box_rate": "N/A", "movie_id": movie_id})
 
@@ -137,16 +158,19 @@ class MaoyanClient:
 
 def _scrape_detail(page, movie_id: int, api_date: str) -> tuple[int, int]:
     url = f"https://piaofang.maoyan.com/i/dashboard/movie?movieId={movie_id}&date={api_date}"
-    page.goto(url, wait_until="domcontentloaded", timeout=15000)
-    try:
-        page.wait_for_selector("text=当日排片场次", timeout=8000)
-    except Exception:
-        pass
+    page.goto(url, wait_until="networkidle", timeout=15000)
+    page.wait_for_timeout(2000)
     text = page.inner_text("body")
     m = re.search(r'当日排片场次\s*\n\s*([\d,]+)', text)
     sc = int(m.group(1).replace(",", "")) if m else 0
-    tm = re.search(r'总场次[：:]\s*([\d.]+)万', text)
-    total = int(float(tm.group(1)) * 10000) if tm else 0
+    if not m:
+        logger.warning("  [详情页] movieId=%s date=%s 未匹配到「当日排片场次」", movie_id, api_date)
+    tm = re.search(r'总场次[：:]\s*([\d,.]+)\s*(万|场)?', text)
+    if tm:
+        num = float(tm.group(1).replace(',', ''))
+        total = int(num * 10000) if tm.group(2) == '万' else int(num)
+    else:
+        total = 0
     return sc, total
 
 
