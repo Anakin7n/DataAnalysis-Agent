@@ -8,6 +8,11 @@ import logging
 import sys
 from pathlib import Path
 
+# 强制 win32com 走晚绑定：Office 更新会改 Excel 的 dispid 表，gen_py 的早绑定
+# 缓存会陈旧并导致 xlwings 抛 DISP_E_MEMBERNOTFOUND（-2147352573）。同 ReelClean-bot。
+import win32com.client.gencache as _gencache
+_gencache.GetClassForCLSID = lambda *a, **kw: None
+
 from config import FEISHU_APP_ID, FEISHU_APP_SECRET, LOG_LEVEL, LOG_FILE
 from agent.core import DataAnalysisAgent
 from gateway.ws_client import FeishuWsClient
